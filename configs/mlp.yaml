@@ -1,0 +1,25 @@
+# configs/mlp.yaml
+# MLP trên Morgan fingerprint.
+# Kế thừa base.yaml.
+
+model:
+  type: "mlp"
+  description: "MLP: fingerprint -> 2048->256->ReLU->dropout->27 logits"
+  hidden_dim: 256
+  dropout: 0.2
+  # Không sigmoid trong forward khi training; BCEWithLogitsLoss xử lý.
+
+features:
+  fingerprint:
+    radius: 2
+    n_bits: 2048
+    use_chirality: true
+
+training:
+  batch_size: 32
+  max_epochs: 50
+  learning_rate: 0.001
+  early_stopping_patience: 8
+  optimizer: "adam"
+  loss: "bce_with_logits"
+  checkpoint_metric: "macro_ap"

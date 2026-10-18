@@ -1,0 +1,17 @@
+# configs/logreg.yaml
+# Logistic Regression per-label trên Morgan fingerprint.
+# Kế thừa base.yaml.
+
+model:
+  type: "logreg"
+  description: "Logistic Regression per label on Morgan fingerprint radius=2 nbits=2048"
+  solver: "lbfgs"
+  max_iter: 1000
+  C: 1.0
+  # class_weight: null  # Chưa dùng weighting giai đoạn đầu
+
+features:
+  fingerprint:
+    radius: 2
+    n_bits: 2048
+    use_chirality: true

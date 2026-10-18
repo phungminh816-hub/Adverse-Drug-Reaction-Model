@@ -1,0 +1,33 @@
+# ADR Project Dependencies
+# Môi trường đã xác minh: Python 3.14.7, Windows
+# Đã có sẵn (không cần cài lại): scikit-learn==1.9.1, numpy==2.5.3, pandas==3.0.6
+# Cần cài thêm:
+
+# Core scientific
+numpy
+pandas
+matplotlib
+
+# Machine learning
+scikit-learn
+
+# Deep learning (CPU-first; dùng torch+cpu build nếu không có GPU)
+# Windows CPU: pip install torch --index-url https://download.pytorch.org/whl/cpu
+torch
+
+# Cheminformatics
+# Cài qua conda: conda install -c conda-forge rdkit
+# Hoặc pip (unofficial wheel): pip install rdkit
+rdkit
+
+# Config
+pyyaml
+
+# Demo
+streamlit
+
+# Development / testing (optional)
+pytest
+pytest-cov
+jupyterlab
+ipykernel

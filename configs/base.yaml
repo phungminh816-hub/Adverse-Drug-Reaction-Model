@@ -1,0 +1,56 @@
+# configs/base.yaml
+# Cấu hình gốc cho dự án ADR.
+# Mọi config model kế thừa và override các trường cần thiết.
+# Không hardcode đường dẫn ổ đĩa; dùng relative path từ project root.
+
+project:
+  name: "adr_project"
+  version: "0.1.0"
+  seed: 42
+
+paths:
+  data_raw: "data/raw"
+  data_processed: "data/processed"
+  data_splits: "data/splits"
+  artifacts: "artifacts"
+  results: "results"
+
+data:
+  source_url: "https://deepchemdata.s3-us-west-1.amazonaws.com/datasets/sider.csv.gz"
+  raw_filename: "sider.csv.gz"
+  processed_filename: "processed.csv"
+  label_names_file: "label_names.json"
+  split_manifest: "split_manifest.csv"
+  smiles_col: "smiles"
+  num_labels: 27
+  download_timeout_s: 60
+  # Không ghi đè raw nếu đã tồn tại; đặt true để force re-download
+  force_download: false
+
+split:
+  strategy: "random"   # "random" | "scaffold"
+  seed: 42
+  train_ratio: 0.80
+  val_ratio: 0.10
+  test_ratio: 0.10
+
+features:
+  fingerprint:
+    radius: 2
+    n_bits: 2048
+    use_chirality: true   # giữ stereochemistry
+
+# Training chung (override trong model config)
+training:
+  batch_size: 32
+  max_epochs: 50
+  learning_rate: 0.001
+  early_stopping_patience: 8
+  optimizer: "adam"
+  loss: "bce_with_logits"
+  # Chọn checkpoint theo validation macro AP
+  checkpoint_metric: "macro_ap"
+
+# Threshold inference ban đầu
+inference:
+  threshold: 0.5

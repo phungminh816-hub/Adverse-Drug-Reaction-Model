@@ -1,0 +1,59 @@
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# Raw and processed data (keep placeholders)
+data/raw/*
+data/processed/*
+data/splits/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+!data/splits/.gitkeep
+
+# Model checkpoints and binary artifacts
+artifacts/*
+!artifacts/.gitkeep
+results/*
+!results/.gitkeep
+
+# Auto-generated results / run outputs
+*.pkl
+*.npz
+*.pt
+*.pth
+
+# Jupyter notebooks checkpoints
+.ipynb_checkpoints/
+*.ipynb~
+
+# IDE / OS
+.idea/
+.vscode/
+*.DS_Store
+Thumbs.db
+
+# Logs and temp
+*.log
+*.tmp
+*.temp
+
+# Environment config (may contain local paths)
+.env
+
+# pytest cache
+.pytest_cache/
+.coverage
+htmlcov/

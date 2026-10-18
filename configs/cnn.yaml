@@ -1,0 +1,28 @@
+# configs/cnn.yaml
+# CNN một nhánh: SMILES -> char tokenizer -> embedding -> Conv1D -> pooling -> 27 logits.
+# Kế thừa base.yaml.
+# Các tham số này là đề xuất để kiểm tra forward; chưa được chọn bằng thực nghiệm.
+
+model:
+  type: "cnn"
+  description: "1-branch CNN on character-tokenized SMILES"
+  embedding_dim: 64
+  channels: 128
+  kernel_size: 5
+  dropout: 0.2
+  # PAD=0, UNK=1 (lưu trong tokenizer artifact)
+
+features:
+  tokenizer:
+    # max_length được fit từ train và lưu vào artifact; không hardcode ở đây
+    pad_token_id: 0
+    unk_token_id: 1
+
+training:
+  batch_size: 32
+  max_epochs: 50
+  learning_rate: 0.001
+  early_stopping_patience: 8
+  optimizer: "adam"
+  loss: "bce_with_logits"
+  checkpoint_metric: "macro_ap"
