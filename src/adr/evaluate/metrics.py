@@ -1,17 +1,4 @@
-"""
-adr.evaluate.metrics – Metrics cho multi-label với missing labels.
-
-Quy tắc quan trọng:
-  - AP tính bằng average_precision_score (không nhầm với PR-AUC hình thang).
-  - Macro AP là chỉ số chính.
-  - ROC-AUC = null nếu split chỉ có một lớp.
-  - AP = null nếu split không có positive.
-  - Không thay null bằng 0 rồi lấy trung bình.
-  - Macro/micro precision, recall, F1 chỉ xét phần tử có mask=True.
-  - Báo số nhãn hợp lệ và nhãn bị loại cho từng metric.
-  - Threshold mặc định 0.5; optimizer threshold trên validation (TODO).
-  - Dùng cùng tập nhãn hợp lệ khi so sánh các model; không đổi để làm đẹp điểm.
-"""
+"""Tính AP, ROC-AUC, precision, recall và F1 trên nhãn quan sát được."""
 
 from __future__ import annotations
 
@@ -38,13 +25,13 @@ class LabelMetrics:
     n_positive: int
     n_negative: int
     n_missing: int
-    ap: float | None                # None nếu không xác định
+    ap: float | None
     roc_auc: float | None
     precision: float | None
     recall: float | None
     f1: float | None
     valid: bool
-    reason: str = ""               # lý do nếu không hợp lệ
+    reason: str = ""
 
 
 @dataclass
@@ -76,16 +63,16 @@ class EvalResult:
 
 
 def evaluate(
-    scores: np.ndarray,           # [N, 27] float, sau sigmoid
-    targets: np.ndarray,          # [N, 27] float 0/1
-    mask: np.ndarray,             # [N, 27] bool
+    scores: np.ndarray,
+    targets: np.ndarray,
+    mask: np.ndarray,
     label_names: list[str],
     threshold: float = 0.5,
     split: str = "val",
     model_id: str = "unknown",
 ) -> EvalResult:
     """
-    Tính đầy đủ metrics cho multi-label multi-class với missing labels.
+    Tính metric phân loại đa nhãn tại các vị trí mask=True.
 
     Args:
         scores: Sigmoid scores [N, 27] ∈ [0, 1].
@@ -99,25 +86,33 @@ def evaluate(
     Returns:
         EvalResult với metrics đầy đủ.
     """
+    scores, targets, mask = np.asarray(scores), np.asarray(targets), np.asarray(mask)
     n_labels = len(label_names)
-    assert scores.shape[1] == n_labels
-    assert targets.shape[1] == n_labels
-    assert mask.shape[1] == n_labels
+    if scores.ndim != 2 or scores.shape != targets.shape or mask.shape != targets.shape or scores.shape[1] != n_labels:
+        raise ValueError("Scores, nhãn và mask phải cùng kích thước [N, len(label_names)].")
+    if not np.isin(mask, [0, 1]).all():
+        raise ValueError("Mask chỉ được chứa 0 hoặc 1.")
+    mask = mask.astype(bool)
+    if not np.isin(targets[mask], [0, 1]).all():
+        raise ValueError("Nhãn quan sát được phải là 0 hoặc 1.")
+    observed_scores = scores[mask]
+    if not np.isfinite(observed_scores).all() or np.any((observed_scores < 0) | (observed_scores > 1)):
+        raise ValueError("Scores quan sát được phải hữu hạn và nằm trong [0, 1].")
+    if not np.isfinite(threshold) or not 0 <= threshold <= 1:
+        raise ValueError("Threshold phải nằm trong [0, 1].")
 
     per_label: list[LabelMetrics] = []
     valid_aps: list[float] = []
     valid_roc_aucs: list[float] = []
     warnings: list[str] = []
 
-    # Prediction binary theo threshold (chỉ tính trên observed)
     preds = (scores >= threshold).astype(int)
 
-    # Cho micro metrics: thu thập tất cả phần tử observed
     all_targets_obs = []
     all_preds_obs = []
 
     for j in range(n_labels):
-        obs = mask[:, j]  # bool [N]
+        obs = mask[:, j]
         n_obs = obs.sum()
         n_missing = (~obs).sum()
         n_pos = int(targets[obs, j].sum()) if n_obs > 0 else 0
@@ -127,7 +122,6 @@ def evaluate(
             all_targets_obs.extend(targets[obs, j].tolist())
             all_preds_obs.extend(preds[obs, j].tolist())
 
-        # Kiểm tra tính hợp lệ
         if n_obs == 0:
             lm = LabelMetrics(
                 label_name=label_names[j], label_idx=j,
@@ -138,7 +132,6 @@ def evaluate(
             per_label.append(lm)
             continue
 
-        # AP
         ap = None
         ap_reason = ""
         if n_pos == 0:
@@ -149,7 +142,6 @@ def evaluate(
             except Exception as e:
                 ap_reason = f"average_precision_score lỗi: {e}"
 
-        # ROC-AUC
         roc = None
         roc_reason = ""
         if n_pos == 0 or n_neg == 0:
@@ -160,7 +152,6 @@ def evaluate(
             except Exception as e:
                 roc_reason = f"roc_auc_score lỗi: {e}"
 
-        # Precision, Recall, F1 (binary, chỉ observed)
         prec = rec = f1 = None
         try:
             prec = float(precision_score(targets[obs, j], preds[obs, j], zero_division=0))
@@ -169,7 +160,7 @@ def evaluate(
         except Exception as e:
             warnings.append(f"Nhãn '{label_names[j]}': precision/recall/f1 lỗi: {e}")
 
-        valid = True  # Có ít nhất nhãn quan sát
+        valid = True
         reason = ""
         if ap is None:
             reason += ap_reason + " | "
@@ -190,11 +181,9 @@ def evaluate(
         if roc is not None:
             valid_roc_aucs.append(roc)
 
-    # Macro metrics (chỉ tính trên nhãn có giá trị hợp lệ)
     macro_ap = float(np.mean(valid_aps)) if valid_aps else None
     macro_roc_auc = float(np.mean(valid_roc_aucs)) if valid_roc_aucs else None
 
-    # Micro metrics trên tất cả observed
     micro_prec = micro_rec = micro_f1 = None
     if all_targets_obs:
         try:
@@ -239,7 +228,7 @@ def print_eval_summary(result: EvalResult) -> None:
         for w in result.warnings:
             print(f"  ! {w}")
     print()
-    # Per-label tóm tắt
+
     print(f"  {'Nhãn':<50} {'AP':>7} {'ROC-AUC':>8} {'F1':>6} {'N+':>5}")
     print(f"  {'-'*80}")
     for lm in result.per_label:

@@ -1,234 +1,162 @@
-# ADR Prediction Project – HUST 2026-1
+# ADR Predictor — HUST Project 1
 
-**Ứng dụng học máy và học sâu dự đoán các nhóm phản ứng có hại của thuốc từ biểu diễn phân tử.**
+Dự đoán 27 nhóm ADR MedDRA từ cấu trúc phân tử SMILES, dùng benchmark SIDER MoleculeNet.
+Pipeline chạy được với Frequency, Logistic Regression, MLP và CNN.
+Điểm model chưa hiệu chỉnh thành xác suất nguy cơ trên bệnh nhân; chỉ phục vụ học tập/nghiên cứu.
 
-- **Đầu vào:** SMILES (chuỗi biểu diễn cấu trúc phân tử)
-- **Đầu ra:** Điểm cho 27 nhóm ADR MedDRA (phân loại đa nhãn)
-- **Benchmark:** SIDER MoleculeNet (~1.427 thuốc, 27 nhãn)
-- **Thời gian:** 12 tuần, 12–15 giờ/tuần
+## Chạy trên máy hiện tại
 
-> ⚠️ **Giới hạn diễn giải:** Điểm sigmoid chưa hiệu chỉnh, không phải xác suất bệnh nhân gặp ADR. Nhãn 0 không chứng minh thuốc an toàn. Không dùng cho quyết định lâm sàng.
-
----
-
-## Môi trường thực tế
-
-Đã xác minh: Python 3.14.7 · scikit-learn 1.9.1 · numpy 2.5.3 · pandas 3.0.6  
-Cần cài thêm: rdkit, torch, pyyaml, streamlit, pytest
-
----
-
-## Cài đặt
-
-### Windows PowerShell
+Môi trường `.venv`, dữ liệu thật và model được tạo trực tiếp trong project.
+Môi trường hiện tại dùng Python 3.14.7, PyTorch CPU và kế thừa các thư viện đã cài trên máy.
 
 ```powershell
-# Tạo và kích hoạt virtual environment
+cd D:\HUST_20261\Project1\ADR_Product
+.\run.ps1
+```
+
+Mở http://127.0.0.1:8501, nhập SMILES và bấm **Submit** hoặc nhấn Enter.
+Giao diện tự nạp model, ưu tiên MLP, và hiển thị bảng 5 nhóm ADR có điểm cao nhất.
+Dừng server bằng Ctrl+C. Nếu PowerShell chặn script:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\run.ps1
+```
+
+Có thể chạy trực tiếp, không cần kích hoạt virtual environment:
+
+```powershell
+.\.venv\Scripts\python.exe -m streamlit run app/streamlit_app.py
+```
+
+## Cài mới trên máy khác
+
+Cần Python >=3.10 và phiên bản có wheel tương thích cho RDKit/PyTorch.
+Các phiên bản đã kiểm chứng trên máy này nằm trong `requirements-tested.txt`.
+
+```powershell
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-
-# Nếu PowerShell execution policy bị chặn, dùng:
-# .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-# thay vì kích hoạt venv
-
-# Cài dependencies
-python -m pip install --upgrade pip
-python -m pip install -r requirements.txt
-
-# PyTorch CPU (nếu không có GPU):
-python -m pip install torch --index-url https://download.pytorch.org/whl/cpu
-
-# RDKit (khuyến nghị qua conda):
-# conda install -c conda-forge rdkit
-# Hoặc pip (unofficial):
-# python -m pip install rdkit
-
-# Cài package ở chế độ editable
-python -m pip install -e .
+.\.venv\Scripts\python.exe -m pip install --upgrade pip
+.\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
 
-### Google Colab
-
-```python
-!pip install rdkit pyyaml streamlit scikit-learn
-!pip install torch  # Colab đã có GPU
-!git clone <your-repo-url>
-%cd ADR_Product
-!pip install -e .
-```
-
----
-
-## Chạy nhanh
-
-### 1. Smoke test offline (không cần data thật)
+Hoặc chạy `.\setup.ps1`. Dùng `-UseSystemPackages` nếu chủ động muốn tái sử dụng thư viện trên máy.
+PyTorch CPU có thể cài từ index chính thức:
 
 ```powershell
-python scripts/smoke.py
+.\.venv\Scripts\python.exe -m pip install torch --index-url https://download.pytorch.org/whl/cpu
 ```
 
-Kết quả mong đợi: tất cả test PASS (một số skip nếu rdkit/torch chưa cài).
+## Pipeline một lệnh
 
-### 2. Unit tests
+Lệnh này tải dữ liệu công khai, chuẩn bị dữ liệu, chia split, train và đánh giá **validation**:
 
 ```powershell
-python -m pytest -q
+.\.venv\Scripts\python.exe scripts/run_pipeline.py --models logreg
+.\.venv\Scripts\python.exe scripts/run_pipeline.py --models frequency logreg mlp cnn --device cpu
 ```
 
-### 3. Pipeline đầy đủ
+Giới hạn số epoch khi chỉ muốn kiểm tra kỹ thuật:
 
 ```powershell
-# Tải data
-python -m adr.data.download --config configs/base.yaml
-
-# Chuẩn bị (canonicalize, drug_id)
-python -m adr.data.prepare --config configs/base.yaml
-
-# Chia split
-python -m adr.data.split --config configs/base.yaml --strategy random
-
-# Train baseline Logistic Regression
-python -m adr.train.baseline --config configs/logreg.yaml
-
-# Evaluate trên validation (lấy <run_id> từ output của lệnh train)
-python -m adr.evaluate.run --run-dir artifacts/<run_id> --split val
-
-# Dự đoán cho một SMILES (CCO = input kiểm tra kỹ thuật, không gán tên thuốc)
-python -m adr.predict.run --run-dir artifacts/<run_id> --smiles "CCO"
-
-# Demo Streamlit
-python -m streamlit run app/streamlit_app.py
+.\.venv\Scripts\python.exe scripts/run_pipeline.py --models mlp cnn --epochs 2 --device cpu
 ```
 
-> **Ghi chú `<run_id>`:** Sau khi chạy `python -m adr.train.baseline`, output sẽ in đường dẫn artifact, ví dụ:  
-> `[baseline] LogReg lưu tại: artifacts/logreg_20261015_203000_42`  
-> Dùng tên thư mục đó làm `<run_id>`.
+Mỗi lần train tạo thư mục artifact riêng. Kết quả tổng hợp ghi vào `results/run_summary.json`.
+Chạy lại pipeline sẽ tạo lại split; chọn cùng chiến lược và seed để giữ phép so sánh nhất quán.
+Muốn thử scaffold, dùng `--strategy scaffold --base DUONG_DAN_CONFIG` với các đường dẫn dữ liệu/split/artifact riêng.
+`--base` được áp dụng xuyên suốt prepare, split, training và evaluation; tên CSV, nhãn và manifest lấy từ config.
 
-### 4. Xem help cho bất kỳ lệnh nào
+## Training từng model
+
+Dữ liệu phải được chuẩn bị trước; pipeline một lệnh ở trên đã thực hiện các bước này.
 
 ```powershell
-python -m adr.data.download --help
-python -m adr.data.prepare --help
-python -m adr.data.split --help
-python -m adr.train.baseline --help
-python -m adr.train.neural --help   # Thông báo TODO (Tuần 5-7)
-python -m adr.evaluate.run --help
-python -m adr.predict.run --help
+.\.venv\Scripts\python.exe -m adr.data.download --config configs/base.yaml
+.\.venv\Scripts\python.exe -m adr.data.prepare --config configs/base.yaml
+.\.venv\Scripts\python.exe -m adr.data.split --config configs/base.yaml --strategy random
+
+.\.venv\Scripts\python.exe -m adr.train.baseline --config configs/frequency.yaml
+.\.venv\Scripts\python.exe -m adr.train.baseline --config configs/logreg.yaml
+.\.venv\Scripts\python.exe -m adr.train.neural --config configs/mlp.yaml --device cpu
+.\.venv\Scripts\python.exe -m adr.train.neural --config configs/cnn.yaml --device cpu
 ```
 
----
-
-## Cấu trúc dự án
-
-```text
-ADR_Product/
-├── README.md               # File này
-├── pyproject.toml          # Packaging (cài editable)
-├── requirements.txt        # Dependencies + ghi chú cài đặt
-├── .gitignore
-│
-├── configs/                # YAML config cho từng model
-│   ├── base.yaml           # Config gốc (seed, paths, data, split)
-│   ├── frequency.yaml      # Baseline tần suất
-│   ├── logreg.yaml         # Logistic Regression per-label
-│   ├── mlp.yaml            # MLP neural
-│   └── cnn.yaml            # CNN 1-nhánh
-│
-├── data/                   # KHÔNG commit data thật
-│   ├── raw/                # sider.csv.gz + sider.csv (sau download)
-│   ├── processed/          # processed.csv, label_names.json, label_mask.npy
-│   └── splits/             # split_manifest.csv, split_meta.json
-│
-├── src/adr/                # Package chính
-│   ├── config.py           # Load/merge/validate YAML
-│   ├── schemas.py          # Dataclass contracts (ArtifactMetadata, PredictionResult)
-│   ├── data/               # download, validate, prepare, split
-│   ├── features/           # fingerprints (Morgan), tokenizer (char-level)
-│   ├── models/             # frequency, logreg, mlp, cnn
-│   ├── train/              # losses, baseline trainer, neural (TODO)
-│   ├── evaluate/           # metrics, evaluation runner
-│   ├── predict/            # predictor thống nhất, CLI
-│   └── utils/              # seed, paths, artifact helpers
-│
-├── scripts/
-│   └── smoke.py            # End-to-end smoke test offline
-│
-├── tests/                  # pytest test suite
-│   ├── test_data_contracts.py
-│   ├── test_models.py
-│   ├── test_metrics.py
-│   └── test_artifacts.py
-│
-├── app/
-│   └── streamlit_app.py    # Demo web app
-│
-├── notebooks/
-│   └── 01_eda.ipynb        # EDA (gọi module adr, không giữ logic pipeline)
-│
-├── artifacts/              # Run artifacts (KHÔNG commit)
-├── results/                # Kết quả evaluate (KHÔNG commit)
-└── reports/
-    ├── roadmap.md          # Lộ trình 12 tuần
-    └── report_outline.md   # Khung báo cáo nghiên cứu
-```
-
----
-
-## Config
-
-Merge rule: `base.yaml` được load trước, model config (`logreg.yaml`, v.v.) deep-merge đè lên.  
-Key lồng nhau của base không bị mất nếu model config chỉ override một sub-key.
+MLP/CNN: tối đa 50 epoch, early stopping sau 8 epoch không tăng validation macro AP.
+`model.pt` chứa checkpoint tốt nhất; `training_state.pt` chứa trạng thái cuối để resume.
+`history.json` và `training_summary.json` ghi loss, AP, epoch tốt nhất và thiết bị.
+CNN fit vocabulary bằng train; chiều dài tối đa bị giới hạn 512 ký tự trong config để kiểm soát RAM.
+Inference báo nếu có UNK hoặc chuỗi bị cắt. Không fit lại tokenizer bằng validation/test.
 
 ```powershell
-# Kiểm tra config hợp lệ
-python -m adr.config --config configs/logreg.yaml
+# Thay TEN_RUN bằng tên thư mục được in sau khi train.
+.\.venv\Scripts\python.exe -m adr.train.neural --config configs/mlp.yaml --resume artifacts/TEN_RUN --epochs 80 --device cpu
 ```
 
----
+`--epochs` là tổng số epoch. Resume giữ nguyên seed, model, features và các tham số training chính.
+Nếu run đã early stop, lệnh resume không huấn luyện thêm; đổi cấu hình thì tạo run mới.
+Mọi model đều từ chối training nếu có nhãn hoàn toàn không có quan sát trong tập train.
+Checkpoint chỉ cho phép resume khi dataset, mask và split khớp checksum.
 
-## Trạng thái hiện tại (Tuần 1)
+## Đánh giá và dự đoán
 
-| Thành phần | Trạng thái |
-|---|---|
-| Packaging & config | ✅ Hoạt động |
-| Download, validate, prepare | ✅ Skeleton (cần RDKit + data thật) |
-| Split (random) | ✅ Hoạt động |
-| Split (scaffold) | 🚧 TODO Tuần 10 |
-| Morgan fingerprint | ✅ Skeleton (cần RDKit) |
-| Char tokenizer | ✅ Hoạt động |
-| Frequency baseline | ✅ Hoạt động |
-| LogReg per-label | ✅ Hoạt động |
-| MLP forward | ✅ Hoạt động (cần torch) |
-| CNN forward + pad invariance | ✅ Hoạt động (cần torch) |
-| Masked BCE loss | ✅ Hoạt động (cần torch) |
-| Metrics (AP, ROC-AUC, null) | ✅ Hoạt động |
-| Predictor thống nhất | ✅ Baseline; Neural TODO |
-| Streamlit demo | ✅ Hoạt động |
-| Training neural (MLP/CNN) | 🚧 TODO Tuần 5-7 |
-| Smoke test | ✅ (một số skip nếu thiếu lib) |
-| pytest suite | ✅ (một số skip nếu thiếu torch) |
+```powershell
+.\.venv\Scripts\python.exe -m adr.evaluate.run --run-dir artifacts/TEN_RUN --split val
+.\.venv\Scripts\python.exe -m adr.predict.run --run-dir artifacts/TEN_RUN --smiles "CC(=O)Nc1ccc(O)cc1"
+```
 
----
+Metric chính là macro average precision (AP), không phải accuracy.
+ROC-AUC không xác định nếu chỉ có một lớp; AP không xác định khi không có positive.
+Không dùng ô nhãn missing để tính loss hoặc metric. Không coi nhãn 0 là bằng chứng thuốc an toàn.
 
-## Ghi chú thiết kế
+Tập test không được đánh giá tự động. Chỉ khi đã chọn xong cấu hình bằng validation:
 
-- **Drug ID:** SHA-256 của canonical SMILES (không dùng Python `hash()` vì không ổn định)
-- **Mask:** NaN trong dataset = nhãn chưa quan sát được; `mask=0` tại vị trí này, giá trị 0.0 là đệm
-- **Leakage:** Cùng drug_id không xuất hiện ở hai split; vocabulary fit chỉ từ train
-- **Test lock:** `python -m adr.evaluate.run --split test` chỉ chạy khi metadata có `config_locked: true`
-- **Scaffold split:** Raise `NotImplementedError` khi chọn; không fallback âm thầm về random
+```powershell
+.\.venv\Scripts\python.exe -m adr.evaluate.run --run-dir artifacts/TEN_RUN --split test --lock-config
+```
 
----
+Kết quả nằm trong `artifacts/TEN_RUN/eval_val.json` hoặc `eval_test.json`.
+Đánh giá kiểm tra checksum dataset/split/mask và thứ tự tên nhãn trước khi tính điểm.
+Artifact đã train có thể mang sang máy khác để inference; dùng `--base` với config đường dẫn mới nếu muốn evaluate tại máy khác.
 
-## Lộ trình
+## Training ở đâu
 
-Xem [reports/roadmap.md](reports/roadmap.md).
+Máy hiện tại đủ để chạy bốn model trên SIDER bằng CPU; GPU không bắt buộc.
+Nếu thử nhiều cấu hình hoặc muốn train bằng GPU, dùng Google Colab:
 
----
+1. Tạo gói mã nguồn: `.\.venv\Scripts\python.exe scripts/export_colab.py`.
+2. Mở `notebooks/02_train_colab.ipynb` trên Colab.
+3. Chọn runtime có GPU, upload `results/ADR_Product_colab.zip`, rồi chạy các cell.
+4. Notebook train MLP/CNN và tải về `adr_trained_artifacts.zip`.
+5. Giải nén để các thư mục model nằm ngay trong `artifacts/` trên máy này; mở lại app.
 
-## Tài liệu tham khảo
+Colab cấp tài nguyên/GPU theo tình trạng khả dụng; không bảo đảm luôn có GPU.
+Notebook tự chọn CPU nếu CUDA không sẵn sàng. Không cần gắn plugin GitHub để dùng cách upload ZIP.
+Nguồn: [Colab FAQ](https://research.google.com/colaboratory/faq.html).
 
-- SIDER benchmark: https://sideeffects.embl.de/
-- MoleculeNet SIDER CSV: https://deepchemdata.s3-us-west-1.amazonaws.com/datasets/sider.csv.gz
-- DeepChem loader: https://github.com/deepchem/deepchem/blob/master/deepchem/molnet/load_function/sider_datasets.py
-- MoleculeNet docs: https://deepchem.readthedocs.io/en/latest/api_reference/moleculenet.html#sider-datasets
+## Kiểm tra
+
+```powershell
+.\.venv\Scripts\python.exe -m pytest -q
+.\.venv\Scripts\python.exe scripts/smoke.py
+```
+
+Test bổ sung kiểm tra pipeline neural, save/load, resume khớp train liên tục, nhãn missing,
+SMILES lỗi, scaffold không giao nhau và từ chối evaluate khi dữ liệu đã thay đổi.
+Smoke dùng dữ liệu tổng hợp; chỉ dùng để kiểm tra kỹ thuật.
+
+## Các thư mục chính
+
+- `configs/`: tham số dữ liệu, split, features và model.
+- `src/adr/data/`: tải, validate, chuẩn bị và chia dữ liệu.
+- `src/adr/features/`: Morgan fingerprint, tokenizer ký tự.
+- `src/adr/models/`, `src/adr/train/`: model, masked loss, training.
+- `src/adr/evaluate/`, `src/adr/predict/`: đánh giá và inference.
+- `app/streamlit_app.py`: giao diện demo dùng Predictor chung.
+- `data/`: dữ liệu; `artifacts/`: model; `results/`: kết quả chạy.
+- [Báo cáo kỹ thuật và kết quả thực nghiệm](reports/bao_cao_ky_thuat_va_ket_qua_ADR.md); hình nằm trong `reports/images/`.
+
+## Nguồn kỹ thuật
+
+- [SIDER CSV — DeepChem](https://deepchemdata.s3-us-west-1.amazonaws.com/datasets/sider.csv.gz)
+- [RDKit fingerprint generator](https://www.rdkit.org/docs/source/rdkit.Chem.rdFingerprintGenerator.html)
+- [PyTorch checkpoint và resume](https://docs.pytorch.org/tutorials/beginner/saving_loading_models.html)

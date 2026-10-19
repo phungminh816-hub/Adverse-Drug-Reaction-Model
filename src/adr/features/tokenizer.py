@@ -1,29 +1,8 @@
-"""
-adr.features.tokenizer – Character-level SMILES tokenizer cho CNN.
-
-API:
-  tok = CharTokenizer()
-  tok.fit(train_smiles)              # fit vocabulary từ train
-  ids, mask = tok.transform(smiles)  # encode + pad
-  tok.save(path)
-  tok2 = CharTokenizer.load(path)   # load không fit lại
-
-Quy ước:
-  PAD_ID = 0 (không đóng góp vào pooling)
-  UNK_ID = 1 (ký tự lạ)
-
-Đảm bảo:
-  - Tokenizer không fit lại ở validation/inference.
-  - Ký tự lạ → UNK; báo tỷ lệ UNK mỗi lần transform.
-  - max_length fit từ train (max độ dài); mọi cap khác phải là config.
-  - CNN mask padding: attention_mask=True nơi token hợp lệ.
-  - CNN output bất biến khi chỉ thêm PAD đuôi chuỗi.
-"""
+"""Mã hóa ký tự SMILES thành token, padding, mask và thống kê UNK."""
 
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -57,6 +36,9 @@ class CharTokenizer:
         Returns:
             self (để chain)
         """
+        if not smiles_list or any(not isinstance(smi, str) or not smi.strip() for smi in smiles_list):
+            raise ValueError("Cần danh sách SMILES không rỗng để fit tokenizer.")
+        self.vocab = {"[PAD]": PAD_ID, "[UNK]": UNK_ID}
         chars: set[str] = set()
         max_len = 0
         for smi in smiles_list:
@@ -64,7 +46,6 @@ class CharTokenizer:
             chars.update(smi)
             max_len = max(max_len, len(smi))
 
-        # Gán ID theo thứ tự sorted để ổn định
         for ch in sorted(chars):
             if ch not in self.vocab:
                 self.vocab[ch] = len(self.vocab)
@@ -88,15 +69,15 @@ class CharTokenizer:
         if not self.fitted:
             raise RuntimeError("Tokenizer chưa được fit. Gọi fit(train_smiles) trước.")
 
-        L = max_length or self.max_length
-        if L is None:
-            raise ValueError("max_length chưa được set. Gọi fit() trước.")
+        L = self.max_length if max_length is None else max_length
+        if not isinstance(L, (int, np.integer)) or L <= 0:
+            raise ValueError("max_length phải là số nguyên dương.")
 
         ids = [self.vocab.get(ch, UNK_ID) for ch in str(smi)]
-        # Truncate
+
         ids = ids[:L]
         mask = [1] * len(ids)
-        # Pad
+
         pad_len = L - len(ids)
         ids += [PAD_ID] * pad_len
         mask += [0] * pad_len
@@ -118,7 +99,9 @@ class CharTokenizer:
         if not self.fitted:
             raise RuntimeError("Tokenizer chưa được fit.")
 
-        L = max_length or self.max_length
+        L = self.max_length if max_length is None else max_length
+        if not isinstance(L, (int, np.integer)) or L <= 0:
+            raise ValueError("max_length phải là số nguyên dương.")
         all_ids = []
         all_masks = []
         n_unk = 0
@@ -126,7 +109,7 @@ class CharTokenizer:
 
         for smi in smiles_list:
             smi = str(smi)
-            # Đếm UNK trước truncate
+
             raw_ids = [self.vocab.get(ch, UNK_ID) for ch in smi]
             n_unk += sum(1 for x in raw_ids if x == UNK_ID)
             if len(smi) > L:
@@ -135,8 +118,8 @@ class CharTokenizer:
             all_ids.append(ids)
             all_masks.append(mask)
 
-        input_ids = np.array(all_ids, dtype=np.int64)
-        attention_mask = np.array(all_masks, dtype=bool)
+        input_ids = np.array(all_ids, dtype=np.int64).reshape(len(smiles_list), L)
+        attention_mask = np.array(all_masks, dtype=bool).reshape(len(smiles_list), L)
         total_tokens = sum(len(str(s)) for s in smiles_list)
         stats = {
             "n_unk": n_unk,

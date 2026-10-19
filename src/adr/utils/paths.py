@@ -1,24 +1,15 @@
-"""
-adr.utils.paths – Quản lý đường dẫn artifact và run directory.
-
-Không hardcode ổ đĩa. Mọi path tính từ project root hoặc được
-truyền tường minh qua config.
-"""
+"""Xác định đường dẫn dự án, tạo run ID và tính checksum."""
 
 from __future__ import annotations
 
 import datetime
 import hashlib
 from pathlib import Path
-from typing import Any
 
 
 def get_run_id(model_type: str, seed: int) -> str:
-    """
-    Tạo run ID dạng: {model_type}_{YYYYMMDD_HHMMSS}_{seed}
-    Ví dụ: logreg_20261015_203000_42
-    """
-    ts = datetime.datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    """Tạo run ID từ model type, thời gian UTC đến microsecond và seed."""
+    ts = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     return f"{model_type}_{ts}_{seed}"
 
 
@@ -48,7 +39,7 @@ def sha256_str(text: str) -> str:
 
 def find_project_root() -> Path:
     """Tìm project root chứa pyproject.toml từ cwd."""
-    for p in [Path.cwd()] + list(Path.cwd().parents):
+    for p in list(Path(__file__).resolve().parents) + [Path.cwd()] + list(Path.cwd().parents):
         if (p / "pyproject.toml").exists():
             return p
     return Path.cwd()

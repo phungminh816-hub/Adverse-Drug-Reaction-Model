@@ -44,7 +44,7 @@ class TestFrequencyBaseline:
         from adr.models.frequency import FrequencyBaseline
         y = rng.integers(0, 2, (5, N_LABELS)).astype(np.float32)
         mask = np.ones((5, N_LABELS), dtype=bool)
-        mask[:, 0] = False  # nhãn 0 không có observation
+        mask[:, 0] = False
         model = FrequencyBaseline()
         with pytest.raises(ValueError, match="không có sample"):
             model.fit(y, mask)
@@ -91,7 +91,7 @@ class TestLogReg:
         X = rng.random((10, FINGERPRINT_DIM)).astype(np.float32)
         y = rng.integers(0, 2, (10, N_LABELS)).astype(np.float32)
         mask = np.ones((10, N_LABELS), dtype=bool)
-        # Buộc nhãn 0 chỉ có class 0
+
         y[:, 0] = 0.0
         model = PerLabelLogReg()
         model.fit(X[:8], y[:8], mask[:8])
@@ -122,7 +122,7 @@ class TestTokenizer:
         assert masks.shape == ids.shape
 
     def test_unk_for_unseen_chars(self):
-        from adr.features.tokenizer import CharTokenizer, UNK_ID
+        from adr.features.tokenizer import CharTokenizer
         tok = CharTokenizer()
         tok.fit(["CCO"])
         ids, _, stats = tok.transform(["$$$"])
@@ -215,9 +215,8 @@ class TestCNN:
         tok.fit(["CCO", "c1ccccc1"])
         L = tok.max_length
 
-        # Encode "CCO" với max_length=L (có padding)
         ids1, mask1, _ = tok.transform(["CCO"], max_length=L)
-        # Encode "CCO" với max_length=L+5 (thêm 5 PAD)
+
         ids2, mask2, _ = tok.transform(["CCO"], max_length=L + 5)
 
         model = SmilesCharCNN(

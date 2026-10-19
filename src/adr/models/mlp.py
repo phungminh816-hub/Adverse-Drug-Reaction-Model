@@ -1,20 +1,6 @@
-"""
-adr.models.mlp – MLP trên Morgan fingerprint.
-
-Architecture:
-  fingerprint [B, 2048]
-  → Linear(2048, 256) → ReLU → Dropout(p)
-  → Linear(256, 27)   → logits [B, 27]
-
-Không có sigmoid trong forward (BCEWithLogitsLoss xử lý).
-Inference: sigmoid áp sau khi gọi model ở eval mode.
-
-Yêu cầu: torch
-"""
+"""Chuyển Morgan fingerprint thành logits đa nhãn bằng MLP."""
 
 from __future__ import annotations
-
-import sys
 
 try:
     import torch
@@ -84,7 +70,6 @@ if _TORCH_OK:
 
         def save(self, run_dir) -> None:
             """Lưu state_dict và config vào run_dir/model.pt."""
-            import json
             from pathlib import Path
             run_dir = Path(run_dir)
             run_dir.mkdir(parents=True, exist_ok=True)
@@ -113,7 +98,7 @@ if _TORCH_OK:
             return model
 
 else:
-    # Stub khi không có torch
-    class MLP:  # type: ignore
+
+    class MLP:
         def __init__(self, *args, **kwargs):
             _require_torch()

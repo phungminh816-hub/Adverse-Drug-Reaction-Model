@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 from adr.schemas import NUM_LABELS
-from adr.evaluate.metrics import evaluate, EvalResult
+from adr.evaluate.metrics import evaluate
 
 
 N_LABELS = NUM_LABELS
@@ -55,7 +55,7 @@ class TestMetrics:
         """Nhãn chỉ một lớp → ROC-AUC = None."""
         N = 10
         scores = rng.random((N, N_LABELS)).astype(np.float32)
-        targets = np.ones((N, N_LABELS), dtype=np.float32)  # tất cả positive
+        targets = np.ones((N, N_LABELS), dtype=np.float32)
         mask = np.ones((N, N_LABELS), dtype=bool)
         labels = [f"l{i}" for i in range(N_LABELS)]
         result = evaluate(scores, targets, mask, labels)
@@ -81,7 +81,7 @@ class TestMetrics:
         scores = rng.random((N, N_LABELS)).astype(np.float32)
         targets = rng.integers(0, 2, (N, N_LABELS)).astype(np.float32)
         mask = np.ones((N, N_LABELS), dtype=bool)
-        mask[:, 0] = False  # nhãn 0 không quan sát được
+        mask[:, 0] = False
         labels = [f"l{i}" for i in range(N_LABELS)]
         result = evaluate(scores, targets, mask, labels)
         assert not result.per_label[0].valid

@@ -1,27 +1,4 @@
-"""
-scripts/smoke.py – Kiểm tra end-to-end offline, CPU, seed cố định.
-
-KHÔNG cần dataset thật hoặc checkpoint có sẵn.
-Dùng fixture nhỏ tổng hợp với SMILES hợp lệ và nhãn đa nhãn 27 cột.
-Ghi artifact vào artifacts/smoke_<run_id>/ để tránh trộn kết quả thật.
-
-NOTE: Fixture này là SYNTHETIC SMOKE DATA, không phải kết quả nghiên cứu.
-
-Các bước:
-  1. Tạo fixture dữ liệu nhỏ (15 thuốc, 27 nhãn)
-  2. Validate schema
-  3. Prepare (canonicalize, drug_id) – nếu RDKit có
-  4. Split random
-  5. Featurize fingerprint – nếu RDKit có
-  6. Fit frequency baseline → save → load → kiểm tra scores bằng nhau
-  7. Fit LogReg per-label → save → load → kiểm tra scores bằng nhau
-  8. Compute metrics → kiểm tra macro AP có giá trị
-  9. Tokenizer fit/transform/save/load → kiểm tra encoding bất biến
-  10. MLP forward shape – nếu torch có
-  11. CNN forward + masked pooling bất biến với PAD – nếu torch có
-  12. Masked loss – nếu torch có
-  13. Predictor inference cho một SMILES – nếu artifact baseline có
-"""
+"""Kiểm tra config, model, tokenizer, loss và metric bằng dữ liệu tổng hợp."""
 
 from __future__ import annotations
 
@@ -34,7 +11,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-# Thêm src vào path (cho phép chạy không cần pip install -e .)
+
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "src"))
 
@@ -45,14 +22,13 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-SMOKE_DIR = ROOT / "artifacts" / "smoke"
-SMOKE_DIR.mkdir(parents=True, exist_ok=True)
+SMOKE_DIR: Path
 
 SEED = 42
 N_LABELS = 27
-N_MOLECULES = 20  # phải đủ cho 3 split
+N_MOLECULES = 20
 
-# SMILES hợp lệ (PubChem, các hợp chất đơn giản)
+
 FIXTURE_SMILES = [
     "CCO",          "CC(=O)O",      "c1ccccc1",     "CC(C)O",       "CCCC",
     "CC(=O)Nc1ccc(O)cc1",  "OC[C@H](O)[C@@H](O)[C@H](O)CO",  "CN1CCC[C@H]1c2cccnc2",
@@ -67,14 +43,14 @@ assert len(FIXTURE_SMILES) == N_MOLECULES
 rng = np.random.default_rng(SEED)
 
 
-def _make_fixture() -> pd.DataFrame:
+def _make_fixture() -> tuple[pd.DataFrame, list[str]]:
     """Tạo DataFrame fixture với cột smiles và 27 cột nhãn."""
-    # Sinh nhãn 0/1 ngẫu nhiên; một số ô để NaN (missing)
+
     labels = rng.integers(0, 2, size=(N_MOLECULES, N_LABELS)).astype(float)
-    # Tạo ~15% missing
+
     missing_mask = rng.random((N_MOLECULES, N_LABELS)) < 0.15
     labels[missing_mask] = np.nan
-    # Tên nhãn giả (smoke only)
+
     label_names = [f"smoke_label_{i+1:02d}" for i in range(N_LABELS)]
     df = pd.DataFrame(labels, columns=label_names)
     df.insert(0, "smiles", FIXTURE_SMILES)
@@ -97,16 +73,16 @@ def _run(name: str, fn):
 
 
 def test_config():
-    from adr.config import load_config, validate_base_config, resolve_paths
+    from adr.config import load_config, validate_base_config
     cfg = load_config(ROOT / "configs" / "logreg.yaml")
     errors = validate_base_config(cfg)
     assert not errors, f"Config lỗi: {errors}"
 
 
 def test_schemas():
-    from adr.schemas import ArtifactMetadata, PredictionResult, NUM_LABELS
+    from adr.schemas import PredictionResult, NUM_LABELS
     assert NUM_LABELS == 27
-    # PredictionResult kiểm tra độ dài scores
+
     try:
         PredictionResult(
             drug_id="test", input_smiles="CCO", canonical_smiles="CCO",
@@ -121,19 +97,19 @@ def test_schemas():
 def test_tokenizer():
     from adr.features.tokenizer import CharTokenizer
     tok = CharTokenizer()
-    tok.fit(FIXTURE_SMILES[:15])  # fit trên "train"
+    tok.fit(FIXTURE_SMILES[:15])
     assert tok.fitted
-    # transform không fit lại
+
     ids, masks, stats = tok.transform(FIXTURE_SMILES[15:], max_length=tok.max_length)
     assert ids.shape[1] == tok.max_length
     assert masks.shape == ids.shape
-    # Save/load → encoding bất biến
+
     tok_path = SMOKE_DIR / "tokenizer_smoke.json"
     tok.save(tok_path)
     tok2 = CharTokenizer.load(tok_path)
     ids2, masks2, _ = tok2.transform(FIXTURE_SMILES[15:], max_length=tok.max_length)
     assert np.array_equal(ids, ids2), "Tokenizer save/load encoding thay đổi"
-    # Ký tự lạ → UNK
+
     ids_unk, _, stats_unk = tok2.transform(["$$$"], max_length=tok.max_length)
     assert stats_unk["n_unk"] > 0, "Ký tự lạ phải ra UNK"
 
@@ -141,9 +117,9 @@ def test_tokenizer():
 def test_frequency_baseline():
     df, label_names = _make_fixture()
     y = df[label_names].values.astype(np.float32)
-    # mask: 1 nếu không NaN
+
     mask = ~np.isnan(df[label_names].values)
-    # Replace NaN bằng 0 cho training
+
     y = np.nan_to_num(y, nan=0.0)
 
     from adr.models.frequency import FrequencyBaseline
@@ -155,7 +131,6 @@ def test_frequency_baseline():
     assert np.all(np.isfinite(scores))
     assert np.all((scores >= 0) & (scores <= 1))
 
-    # Save / load
     model.save(SMOKE_DIR / "freq")
     model2 = FrequencyBaseline.load(SMOKE_DIR / "freq")
     scores2 = model2.predict_scores(5)
@@ -169,7 +144,6 @@ def test_logreg_no_rdkit():
     mask = ~np.isnan(df[label_names].values)
     y = np.nan_to_num(y, nan=0.0)
 
-    # Fingerprint giả: random binary
     X = rng.integers(0, 2, size=(N_MOLECULES, 2048)).astype(np.float32)
 
     from adr.models.logreg import PerLabelLogReg
@@ -181,7 +155,6 @@ def test_logreg_no_rdkit():
     assert np.all(np.isfinite(scores)), "Scores không hữu hạn"
     assert np.all((scores >= 0) & (scores <= 1)), "Scores ngoài [0,1]"
 
-    # Save / load
     model.save(SMOKE_DIR / "logreg")
     model2 = PerLabelLogReg.load(SMOKE_DIR / "logreg")
     scores2 = model2.predict_scores(X[15:])
@@ -194,20 +167,17 @@ def test_metrics():
     N = 10
     scores = rng.random((N, N_LABELS)).astype(np.float32)
     targets = rng.integers(0, 2, size=(N, N_LABELS)).astype(np.float32)
-    mask = rng.random((N, N_LABELS)) > 0.2  # ~80% observed
+    mask = rng.random((N, N_LABELS)) > 0.2
 
     label_names = [f"label_{i}" for i in range(N_LABELS)]
     result = evaluate(scores, targets, mask, label_names, threshold=0.5, split="val", model_id="smoke")
 
-    # Macro AP chỉ tính trên nhãn hợp lệ
     assert result.n_valid_ap >= 0
     if result.macro_ap is not None:
         assert 0 <= result.macro_ap <= 1
 
-    # Masked loss không đổi khi thay giá trị padding
-    # (test qua metrics: giá trị tại mask=False không ảnh hưởng)
     targets_alt = targets.copy()
-    targets_alt[~mask] = 999.0  # giá trị rác ở vị trí mask=False
+    targets_alt[~mask] = 999.0
     result_alt = evaluate(scores, targets_alt, mask, label_names, threshold=0.5, split="val", model_id="smoke")
     if result.macro_ap is not None and result_alt.macro_ap is not None:
         assert abs(result.macro_ap - result_alt.macro_ap) < 1e-9, \
@@ -244,14 +214,12 @@ def test_cnn_forward_and_pad_invariance():
     tok = CharTokenizer()
     tok.fit(FIXTURE_SMILES)
 
-    # Lấy một SMILES ngắn để kiểm tra pad invariance
     smi = "CCO"
     L = tok.max_length
 
     ids1, mask1, _ = tok.transform([smi], max_length=L)
-    # Thêm padding (nó đã có sẵn nhưng kiểm tra rõ ràng)
-    smi_padded = smi + ""  # không đổi SMILES, chỉ kiểm tra encoding
-    ids2, mask2, _ = tok.transform([smi_padded], max_length=L)
+
+    ids2, mask2, _ = tok.transform([smi], max_length=L + 5)
 
     model = SmilesCharCNN(
         vocab_size=tok.vocab_size,
@@ -273,7 +241,6 @@ def test_cnn_forward_and_pad_invariance():
     assert torch.allclose(out1, out2, atol=1e-5), \
         f"CNN output thay đổi khi padding: max_diff={torch.max(torch.abs(out1-out2))}"
 
-    # Sigmoid scores [0, 1]
     sigmoid_scores = torch.sigmoid(out1).numpy()
     assert np.all(sigmoid_scores >= 0) and np.all(sigmoid_scores <= 1)
 
@@ -291,18 +258,16 @@ def test_masked_loss():
     logits = torch.randn(B, L)
     targets = torch.randint(0, 2, (B, L)).float()
     mask = torch.ones(B, L, dtype=torch.bool)
-    mask[0, :5] = False  # một số missing
+    mask[0, :5] = False
 
     loss1 = masked_bce_loss(logits, targets, mask)
     assert torch.isfinite(loss1)
 
-    # Thay giá trị ở mask=False → loss không đổi
     targets_alt = targets.clone()
     targets_alt[~mask] = 999.0
     loss2 = masked_bce_loss(logits, targets_alt, mask)
     assert torch.allclose(loss1, loss2, atol=1e-6), "Masked loss bị ảnh hưởng bởi giá trị padding"
 
-    # Batch toàn missing → raise RuntimeError
     mask_empty = torch.zeros(B, L, dtype=torch.bool)
     try:
         masked_bce_loss(logits, targets, mask_empty, empty_batch_policy="error")
@@ -325,7 +290,6 @@ def test_split_no_leakage():
     assert len(val_set & test_set) == 0, "Val/Test rò rỉ"
     assert len(assignment) == 50
 
-    # Cùng seed → cùng kết quả
     assignment2 = random_split(drug_ids, train_ratio=0.8, val_ratio=0.1, seed=SEED)
     assert assignment == assignment2, "Split không ổn định với cùng seed"
 
@@ -334,12 +298,16 @@ def test_scaffold_split_raises():
     from adr.data.split import scaffold_split
     try:
         scaffold_split(["a", "b"])
-        assert False, "scaffold_split phải raise NotImplementedError"
-    except NotImplementedError:
+        assert False, "scaffold_split cần canonical_smiles"
+    except ValueError:
         pass
 
 
 def main() -> int:
+    """Chạy các kiểm tra offline trong thư mục tạm và trả exit code tổng hợp."""
+    global SMOKE_DIR
+    PASSED.clear()
+    FAILED.clear()
     print("\n" + "="*60)
     print("  ADR Project – Smoke Test (Synthetic Fixture)")
     print("  CẢNH BÁO: Dữ liệu fixture là synthetic, không dùng cho nghiên cứu")
@@ -356,11 +324,13 @@ def main() -> int:
         ("CNN forward & pad invariance", test_cnn_forward_and_pad_invariance),
         ("Masked BCE loss", test_masked_loss),
         ("Split no leakage", test_split_no_leakage),
-        ("Scaffold split raises NotImplementedError", test_scaffold_split_raises),
+        ("Scaffold split requires SMILES", test_scaffold_split_raises),
     ]
 
-    for name, fn in tests:
-        _run(name, fn)
+    with tempfile.TemporaryDirectory(prefix="adr-smoke-") as temporary_dir:
+        SMOKE_DIR = Path(temporary_dir)
+        for name, fn in tests:
+            _run(name, fn)
 
     print(f"\n{'='*60}")
     print(f"  Passed: {len(PASSED)}/{len(tests)}")

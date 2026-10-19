@@ -1,12 +1,4 @@
-"""
-adr.models.logreg – Logistic Regression per-label trên Morgan fingerprint.
-
-Mỗi nhãn có một LogisticRegression riêng.
-Fit từng nhãn chỉ dùng hàng có mask=True cho nhãn đó.
-Nhãn chỉ có một lớp train dùng ConstantPredictor (trả 0 hoặc 1).
-
-Đảm bảo: predict_scores luôn trả [N, 27] dù một số nhãn chỉ có 1 lớp.
-"""
+"""Huấn luyện Logistic Regression riêng cho từng nhãn trên fingerprint."""
 
 from __future__ import annotations
 
@@ -20,7 +12,7 @@ from adr.schemas import NUM_LABELS
 
 
 class ConstantPredictor:
-    """Fallback khi nhãn chỉ có 1 lớp trong train."""
+    """Trả giá trị cố định khi nhãn train chỉ có một lớp quan sát được."""
 
     def __init__(self, constant: float) -> None:
         self.constant = constant
@@ -54,7 +46,7 @@ class PerLabelLogReg:
         self.solver = solver
         self.max_iter = max_iter
         self.C = C
-        self.estimators: list = []  # list[LogisticRegression | ConstantPredictor]
+        self.estimators: list = []
         self.label_names: list[str] | None = None
         self._fitted = False
 
@@ -65,22 +57,29 @@ class PerLabelLogReg:
         mask_train: np.ndarray,
         label_names: list[str] | None = None,
     ) -> "PerLabelLogReg":
+        """Fit từng bộ phân loại trên các hàng có nhãn quan sát được."""
         X = np.asarray(X_train, dtype=np.float32)
         y = np.asarray(y_train, dtype=np.float32)
-        m = np.asarray(mask_train, dtype=bool)
+        m = np.asarray(mask_train)
+        if X.ndim != 2 or y.ndim != 2 or m.shape != y.shape or y.shape != (len(X), self.n_labels):
+            raise ValueError("Feature, nhãn và mask không khớp kích thước [N, n_labels].")
+        if not np.isfinite(X).all() or not np.isin(m, [0, 1]).all():
+            raise ValueError("Feature phải hữu hạn và mask chỉ được chứa 0 hoặc 1.")
+        m = m.astype(bool)
+        if not np.isin(y[m], [0, 1]).all():
+            raise ValueError("Nhãn quan sát được phải là 0 hoặc 1.")
+        if label_names is not None and len(label_names) != self.n_labels:
+            raise ValueError("Số tên nhãn không khớp n_labels.")
+        no_obs = np.flatnonzero(~m.any(axis=0)).tolist()
+        if no_obs:
+            names = [label_names[j] for j in no_obs] if label_names is not None else no_obs
+            raise ValueError(f"Nhãn không có sample quan sát trong train: {names}")
 
         self.estimators = []
         self.label_names = label_names
 
         for j in range(self.n_labels):
             obs_mask = m[:, j]
-            n_obs = obs_mask.sum()
-
-            if n_obs == 0:
-                print(f"  [logreg] Nhãn {j}: không có sample quan sát → ConstantPredictor(0)")
-                self.estimators.append(ConstantPredictor(0.0))
-                continue
-
             X_j = X[obs_mask]
             y_j = y[obs_mask, j].astype(int)
             classes = np.unique(y_j)
@@ -119,12 +118,12 @@ class PerLabelLogReg:
             if isinstance(est, ConstantPredictor):
                 scores[:, j] = est.predict_proba_pos(M)
             else:
-                # LogisticRegression: lấy prob của class 1
+
                 proba = est.predict_proba(X)
                 if proba.shape[1] == 2:
                     scores[:, j] = proba[:, 1]
                 else:
-                    # Chỉ một lớp được học (edge case)
+
                     scores[:, j] = float(est.classes_[0])
 
         return scores

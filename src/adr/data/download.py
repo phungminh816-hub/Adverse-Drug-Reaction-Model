@@ -1,28 +1,16 @@
-"""
-adr.data.download – Tải SIDER benchmark từ S3.
-
-KHÔNG tự động chạy khi import. Chỉ tải khi gọi tường minh.
-Ghi URL, thời gian tải UTC và SHA-256 vào download_meta.json.
-Không ghi đè raw đang tồn tại nếu force_download=False.
-
-CLI:
-  python -m adr.data.download --config configs/base.yaml
-  python -m adr.data.download --config configs/base.yaml --force
-"""
+"""Tải, giải nén SIDER và lưu checksum của file nguồn."""
 
 from __future__ import annotations
 
 import argparse
 import datetime
 import gzip
-import hashlib
 import json
 import shutil
 import sys
 import urllib.request
 import urllib.error
 from pathlib import Path
-from typing import Any
 
 from adr.config import load_config, resolve_paths
 from adr.utils.paths import sha256_file
@@ -53,14 +41,18 @@ def download_sider(
 
     print(f"[download] Đang tải: {url}")
     print(f"  → {dest}")
+    part = dest.with_name(dest.name + ".part")
     try:
         with urllib.request.urlopen(url, timeout=timeout) as resp:
-            with dest.open("wb") as fh:
+            with part.open("wb") as fh:
                 shutil.copyfileobj(resp, fh)
+        part.replace(dest)
     except urllib.error.URLError as exc:
+        part.unlink(missing_ok=True)
         print(f"[download] LỖI kết nối: {exc}", file=sys.stderr)
         sys.exit(1)
     except TimeoutError:
+        part.unlink(missing_ok=True)
         print(f"[download] LỖI timeout sau {timeout}s", file=sys.stderr)
         sys.exit(1)
 
@@ -68,7 +60,7 @@ def download_sider(
     meta = {
         "url": url,
         "filename": filename,
-        "downloaded_at_utc": datetime.datetime.utcnow().isoformat() + "Z",
+        "downloaded_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
         "sha256": checksum,
         "size_bytes": dest.stat().st_size,
     }
@@ -83,13 +75,19 @@ def download_sider(
 
 def decompress_gz(gz_path: Path, out_path: Path, force: bool = False) -> Path:
     """Giải nén .gz thành out_path."""
+    gz_path, out_path = Path(gz_path), Path(out_path)
     if out_path.exists() and not force:
         print(f"[download] Đã giải nén: {out_path}")
         return out_path
     print(f"[download] Giải nén: {gz_path} → {out_path}")
-    with gzip.open(gz_path, "rb") as f_in:
-        with out_path.open("wb") as f_out:
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    part = out_path.with_name(out_path.name + ".part")
+    try:
+        with gzip.open(gz_path, "rb") as f_in, part.open("wb") as f_out:
             shutil.copyfileobj(f_in, f_out)
+        part.replace(out_path)
+    finally:
+        part.unlink(missing_ok=True)
     return out_path
 
 
@@ -112,8 +110,8 @@ def main(argv: list[str] | None = None) -> None:
     raw_dir: Path = cfg["paths"]["data_raw"]
 
     url = data_cfg["source_url"]
-    gz_filename = data_cfg["raw_filename"]       # sider.csv.gz
-    csv_filename = gz_filename.replace(".gz", "")  # sider.csv
+    gz_filename = data_cfg["raw_filename"]
+    csv_filename = gz_filename.removesuffix(".gz")
 
     force = args.force or data_cfg.get("force_download", False)
 

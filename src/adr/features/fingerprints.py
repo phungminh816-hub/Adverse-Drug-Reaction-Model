@@ -1,30 +1,15 @@
-"""
-adr.features.fingerprints – Morgan fingerprint featurizer.
-
-Yêu cầu RDKit. Nếu thiếu RDKit, import sẽ raise ImportError rõ ràng.
-
-API:
-  fp = MorganFeaturizer(radius=2, n_bits=2048, use_chirality=True)
-  X = fp.transform(smiles_list)  # np.ndarray [N, 2048]
-  fp.save(path)
-  fp2 = MorganFeaturizer.load(path)
-
-Lưu ý:
-  - transform nhận canonical SMILES; lỗi SMILES trả hàng zeros VÀ ghi warning.
-  - Feature config được lưu cùng artifact để kiểm tra khớp khi load.
-"""
+"""Tạo Morgan fingerprint từ SMILES và lưu cấu hình đặc trưng."""
 
 from __future__ import annotations
 
 import json
-import sys
 from pathlib import Path
 
 import numpy as np
 
 try:
     from rdkit import Chem
-    from rdkit.Chem import rdMorganFingerprint
+    from rdkit.Chem import rdFingerprintGenerator
     from rdkit import RDLogger
     RDLogger.DisableLog("rdApp.*")
     _RDKIT_OK = True
@@ -46,7 +31,7 @@ class MorganFeaturizer:
     Tạo Morgan fingerprint (ECFP) từ SMILES.
 
     Args:
-        radius: Bán kính vòng (ECFP4 = radius 2).
+        radius: Bán kính lân cận nguyên tử (ECFP4 = radius 2).
         n_bits: Số bit (mặc định 2048).
         use_chirality: Giữ thông tin lập thể.
     """
@@ -61,6 +46,9 @@ class MorganFeaturizer:
         self.radius = radius
         self.n_bits = n_bits
         self.use_chirality = use_chirality
+        self._generator = rdFingerprintGenerator.GetMorganGenerator(
+            radius=radius, fpSize=n_bits, includeChirality=use_chirality,
+        )
 
     def _smiles_to_fp(self, smi: str) -> tuple[np.ndarray, str | None]:
         """
@@ -70,16 +58,9 @@ class MorganFeaturizer:
             (fp_array [n_bits], error_message | None)
         """
         mol = Chem.MolFromSmiles(smi)
-        if mol is None:
+        if mol is None or mol.GetNumAtoms() == 0:
             return np.zeros(self.n_bits, dtype=np.float32), f"RDKit parse lỗi: {smi[:60]}"
-        fp = rdMorganFingerprint.GetMorganFingerprintAsBitVect(
-            mol,
-            radius=self.radius,
-            nBits=self.n_bits,
-            useChirality=self.use_chirality,
-        )
-        arr = np.zeros(self.n_bits, dtype=np.float32)
-        arr[list(fp.GetOnBits())] = 1.0
+        arr = self._generator.GetFingerprintAsNumPy(mol).astype(np.float32)
         return arr, None
 
     def transform(
@@ -103,7 +84,7 @@ class MorganFeaturizer:
             rows.append(fp)
             if err:
                 errors.append(err)
-        X = np.stack(rows, axis=0)
+        X = np.stack(rows, axis=0) if rows else np.empty((0, self.n_bits), dtype=np.float32)
         return X, errors
 
     def get_config(self) -> dict:

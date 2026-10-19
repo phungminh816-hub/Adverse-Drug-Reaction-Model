@@ -1,16 +1,4 @@
-"""
-adr.predict.run – CLI dự đoán ADR cho SMILES đầu vào.
-
-CLI:
-  python -m adr.predict.run --run-dir artifacts/<run_id> --smiles "CCO"
-  python -m adr.predict.run --run-dir artifacts/<run_id> --smiles-file my_smiles.txt
-
-Cảnh báo giới hạn diễn giải (in cùng kết quả):
-  - Điểm sigmoid chưa hiệu chỉnh, không phải xác suất bệnh nhân gặp ADR.
-  - Nhãn 0 không chứng minh thuốc an toàn.
-  - Nhãn là nhóm rộng MedDRA, không phải triệu chứng cụ thể.
-  - CCO (ethanol) chỉ là input kiểm tra kỹ thuật, không gán tên thuốc y khoa.
-"""
+"""Dự đoán ADR qua CLI từ một SMILES hoặc file chứa nhiều SMILES."""
 
 from __future__ import annotations
 
@@ -96,7 +84,6 @@ def main(argv: list[str] | None = None) -> None:
 
         print(_INTERPRETATION_WARNING)
 
-    # Lưu JSON nếu yêu cầu
     if args.output:
         out_path = Path(args.output)
         out_path.parent.mkdir(parents=True, exist_ok=True)

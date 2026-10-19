@@ -7,7 +7,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from adr.schemas import ArtifactMetadata
@@ -51,7 +50,7 @@ class TestArtifactMetadata:
 
     def test_check_label_names_ok(self, tmp_path):
         meta = _make_metadata(tmp_path)
-        meta.check_label_names(meta.label_names)  # không raise
+        meta.check_label_names(meta.label_names)
 
 
 class TestCheckArtifactDir:
@@ -69,7 +68,7 @@ class TestCheckArtifactDir:
         run_dir = tmp_path / "run"
         run_dir.mkdir()
         meta = _make_metadata(run_dir, "frequency")
-        # Tạo model.json giả
+
         (run_dir / "model.json").write_text(json.dumps({"n_labels": 27}))
         meta2 = check_artifact_dir(run_dir)
         assert meta2.model_type == "frequency"
@@ -86,6 +85,6 @@ class TestCheckArtifactDir:
         run_dir = tmp_path / "run"
         run_dir.mkdir()
         _make_metadata(run_dir, "logreg")
-        # Không tạo model.pkl
+
         with pytest.raises(FileNotFoundError, match="model.pkl"):
             check_artifact_dir(run_dir)

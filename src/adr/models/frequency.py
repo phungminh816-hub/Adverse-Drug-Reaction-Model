@@ -1,14 +1,4 @@
-"""
-adr.models.frequency – Baseline tần suất.
-
-Mỗi nhãn trả tỷ lệ dương trong train tính trên nhãn được quan sát.
-Kết quả: [N, 27] – mọi hàng đều như nhau (không phụ thuộc đầu vào).
-
-Nếu một nhãn không có nhãn train quan sát được:
-  → Raise ValueError rõ và báo nhãn đó; không tự bịa prior.
-
-Nhãn chỉ có dương (không âm) hoặc chỉ có âm vẫn trả tỷ lệ đúng.
-"""
+"""Dự đoán bằng tỷ lệ nhãn dương quan sát được trong tập train."""
 
 from __future__ import annotations
 
@@ -33,7 +23,7 @@ class FrequencyBaseline:
 
     def __init__(self, n_labels: int = NUM_LABELS) -> None:
         self.n_labels = n_labels
-        self.pos_rates: np.ndarray | None = None  # [n_labels]
+        self.pos_rates: np.ndarray | None = None
         self.label_names: list[str] | None = None
         self._fitted = False
 
@@ -50,12 +40,16 @@ class FrequencyBaseline:
             ValueError: nếu một nhãn không có sample quan sát được.
         """
         y = np.asarray(y_train, dtype=np.float32)
-        m = np.asarray(mask_train, dtype=bool)
-
-        if y.shape[1] != self.n_labels or m.shape[1] != self.n_labels:
-            raise ValueError(
-                f"Số nhãn không khớp: y={y.shape[1]}, mask={m.shape[1]}, n_labels={self.n_labels}"
-            )
+        m = np.asarray(mask_train)
+        if y.ndim != 2 or m.shape != y.shape or y.shape[1] != self.n_labels:
+            raise ValueError("Nhãn và mask phải cùng kích thước [N, n_labels].")
+        if not np.isin(m, [0, 1]).all():
+            raise ValueError("Mask chỉ được chứa 0 hoặc 1.")
+        m = m.astype(bool)
+        if not np.isin(y[m], [0, 1]).all():
+            raise ValueError("Nhãn quan sát được phải là 0 hoặc 1.")
+        if label_names is not None and len(label_names) != self.n_labels:
+            raise ValueError("Số tên nhãn không khớp n_labels.")
 
         pos_rates = np.zeros(self.n_labels, dtype=np.float32)
         no_obs_labels = []

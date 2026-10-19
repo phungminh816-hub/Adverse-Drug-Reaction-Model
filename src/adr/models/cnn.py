@@ -1,30 +1,6 @@
-"""
-adr.models.cnn – CNN một nhánh trên character-tokenized SMILES.
-
-Architecture:
-  input_ids [B, L]  (int64)
-  → Embedding(vocab_size, embedding_dim, padding_idx=PAD_ID)
-  → [B, L, embedding_dim]
-  → transpose → [B, embedding_dim, L]
-  → Conv1d(embedding_dim, channels, kernel_size) → ReLU
-  → [B, channels, L']
-  → Masked mean pooling (dùng attention_mask)
-  → [B, channels]
-  → Dropout → Linear(channels, n_labels)
-  → logits [B, 27]
-
-Đảm bảo:
-  - PAD (padding_idx=0) không đóng góp vào embedding.
-  - Masked pooling: activation ở vùng PAD không ảnh hưởng đến output.
-  - CNN output bất biến khi chỉ thêm PAD cuối chuỗi (kiểm tra bằng test).
-  - Không sigmoid trong forward.
-
-Yêu cầu: torch
-"""
+"""Chuyển chuỗi token SMILES thành logits bằng CNN và masked mean pooling."""
 
 from __future__ import annotations
-
-import sys
 
 try:
     import torch
@@ -70,6 +46,8 @@ if _TORCH_OK:
             pad_token_id: int = PAD_TOKEN_ID,
         ) -> None:
             super().__init__()
+            if kernel_size <= 0 or kernel_size % 2 == 0:
+                raise ValueError("kernel_size phải là số lẻ dương để giữ chiều dài chuỗi.")
             self.vocab_size = vocab_size
             self.embedding_dim = embedding_dim
             self.channels = channels
@@ -85,7 +63,7 @@ if _TORCH_OK:
                 in_channels=embedding_dim,
                 out_channels=channels,
                 kernel_size=kernel_size,
-                padding=kernel_size // 2,  # same padding
+                padding=kernel_size // 2,
             )
             self.dropout = nn.Dropout(p=dropout)
             self.head = nn.Linear(channels, n_labels)
@@ -99,33 +77,26 @@ if _TORCH_OK:
             Args:
                 input_ids: int64 [B, L]
                 attention_mask: bool [B, L] – True nơi token hợp lệ.
-                                Nếu None, coi tất cả là hợp lệ.
+                                Nếu None, xác định PAD từ input_ids.
             Returns:
                 logits: float [B, n_labels]  (không sigmoid)
             """
-            # Embedding: [B, L, E]
+            if attention_mask is None:
+                attention_mask = input_ids.ne(self.pad_token_id)
+            if attention_mask.shape != input_ids.shape:
+                raise ValueError("attention_mask phải cùng kích thước input_ids.")
+
             emb = self.embedding(input_ids)
+            emb = emb * attention_mask.unsqueeze(-1)
 
-            # Conv1d cần [B, C, L]: transpose
-            x = emb.transpose(1, 2)  # [B, E, L]
-            x = F.relu(self.conv(x))  # [B, channels, L']
+            x = emb.transpose(1, 2)
+            x = F.relu(self.conv(x))
 
-            # Masked mean pooling
-            # x: [B, channels, L']  attention_mask: [B, L]
-            L_prime = x.shape[2]
-            if attention_mask is not None:
-                # Resize mask nếu same-padding làm L' = L
-                mask = attention_mask[:, :L_prime].float()  # [B, L']
-                # Broadcast: [B, 1, L'] nhân với [B, channels, L']
-                mask_expanded = mask.unsqueeze(1)  # [B, 1, L']
-                x = x * mask_expanded
-                # Sum / count hợp lệ
-                pool = x.sum(dim=2) / (mask_expanded.sum(dim=2).clamp(min=1))  # [B, channels]
-            else:
-                pool = x.mean(dim=2)  # [B, channels]
+            mask_expanded = attention_mask.unsqueeze(1).to(x.dtype)
+            pool = (x * mask_expanded).sum(dim=2) / mask_expanded.sum(dim=2).clamp(min=1)
 
             pool = self.dropout(pool)
-            logits = self.head(pool)  # [B, n_labels]
+            logits = self.head(pool)
             return logits
 
         def get_config(self) -> dict:
@@ -173,6 +144,6 @@ if _TORCH_OK:
             return model
 
 else:
-    class SmilesCharCNN:  # type: ignore
+    class SmilesCharCNN:
         def __init__(self, *args, **kwargs):
             _require_torch()

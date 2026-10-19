@@ -1,27 +1,9 @@
-"""
-adr.data.split – Chia processed.csv thành train/val/test.
-
-Chiến lược hiện có:
-  - "random": Group random split theo canonical molecule (drug_id). Mỗi
-    drug_id chỉ xuất hiện trong một split.
-  - "scaffold": TODO – NotImplementedError khi chọn.
-
-Quy tắc:
-  - Chỉ split sau khi validate đã chạy sạch.
-  - Cùng drug_id không được xuất hiện ở hai split.
-  - Lặp lại cùng seed cho cùng manifest.
-  - Lưu manifest: drug_id, split (train|val|test).
-
-CLI:
-  python -m adr.data.split --config configs/base.yaml --strategy random
-  python -m adr.data.split --config configs/base.yaml --strategy scaffold  # NotImplementedError
-"""
+"""Chia phân tử thành train/validation/test theo random hoặc scaffold."""
 
 from __future__ import annotations
 
 import argparse
 import json
-import sys
 from pathlib import Path
 
 import pandas as pd
@@ -43,6 +25,9 @@ def random_split(
     Returns:
         dict drug_id → "train" | "val" | "test"
     """
+    _validate_ratios(train_ratio, val_ratio)
+    if len(set(drug_ids)) != len(drug_ids):
+        raise ValueError("drug_id bị trùng; chạy prepare trước khi chia split.")
     rng = np.random.default_rng(seed)
     ids = np.array(drug_ids)
     idx = rng.permutation(len(ids))
@@ -66,26 +51,48 @@ def random_split(
     return assignment
 
 
-def scaffold_split(drug_ids: list[str], *args, **kwargs) -> dict[str, str]:
-    """
-    Scaffold split – chưa triển khai.
+def scaffold_split(drug_ids: list[str], canonical_smiles: list[str] | None = None,
+                   train_ratio: float = 0.8, val_ratio: float = 0.1,
+                   seed: int = 42) -> dict[str, str]:
+    """Giữ mỗi Bemis-Murcko scaffold trong đúng một split."""
+    from rdkit import Chem
+    from rdkit.Chem.Scaffolds import MurckoScaffold
 
-    TODO:
-      Input: drug_ids + canonical_smiles mapping.
-      Bước:
-        1. Tính Bemis-Murcko scaffold bằng RDKit cho mỗi phân tử.
-        2. Nhóm theo scaffold.
-        3. Phân chia nhóm scaffold (không phải phân tử) vào train/val/test.
-        4. Scaffold rỗng → giữ tất cả trong một nhóm riêng; báo tỷ lệ ảnh hưởng.
-        5. Đảm bảo không scaffold nào nằm ở hai split.
-      Output: Manifest giống random_split.
-      Điều kiện hoàn thành: test không giao scaffold với train/val.
-    """
-    raise NotImplementedError(
-        "Scaffold split chưa được triển khai.\n"
-        "  Xem TODO trong adr/data/split.py::scaffold_split.\n"
-        "  Dùng --strategy random cho phiên bản hiện tại."
-    )
+    if canonical_smiles is None or len(canonical_smiles) != len(drug_ids):
+        raise ValueError("Cần canonical_smiles tương ứng với từng drug_id.")
+    if len(set(drug_ids)) != len(drug_ids):
+        raise ValueError("drug_id bị trùng; chạy prepare trước khi chia split.")
+    _validate_ratios(train_ratio, val_ratio)
+    groups = {}
+    for did, smi in zip(drug_ids, canonical_smiles):
+        mol = Chem.MolFromSmiles(smi)
+        if mol is None or mol.GetNumAtoms() == 0:
+            raise ValueError(f"SMILES không hợp lệ: {smi}")
+        scaffold = MurckoScaffold.MurckoScaffoldSmiles(mol=mol, includeChirality=False)
+        groups.setdefault(scaffold, []).append(did)
+    if len(groups) < 3:
+        raise ValueError("Cần ít nhất 3 nhóm scaffold để tạo train/val/test.")
+    ordered = [groups[k] for k in sorted(groups)]
+    np.random.default_rng(seed).shuffle(ordered)
+    ordered.sort(key=len, reverse=True)
+    names = ["train", "val", "test"]
+    targets = np.array([train_ratio, val_ratio, 1 - train_ratio - val_ratio]) * len(drug_ids)
+    counts = np.zeros(3)
+    assignment = {}
+    for group in ordered:
+
+        dest = int(np.argmax(targets - counts))
+        counts[dest] += len(group)
+        assignment.update({did: names[dest] for did in group})
+    if set(assignment.values()) != set(names):
+        raise ValueError("Nhóm scaffold quá lệch để tạo đủ 3 split; hãy dùng random hoặc đổi tỷ lệ.")
+    return assignment
+
+
+def _validate_ratios(train_ratio, val_ratio):
+    """Kiểm tra tỷ lệ train, validation và phần test còn lại đều dương."""
+    if not (0 < train_ratio < 1 and 0 < val_ratio < 1 and train_ratio + val_ratio < 1):
+        raise ValueError("Tỷ lệ train/val/test phải dương và tổng bằng 1.")
 
 
 def split_dataset(
@@ -95,6 +102,7 @@ def split_dataset(
     train_ratio: float = 0.80,
     val_ratio: float = 0.10,
     seed: int = 42,
+    manifest_filename: str = "split_manifest.csv",
 ) -> pd.DataFrame:
     """
     Đọc processed.csv và tạo split manifest.
@@ -117,31 +125,33 @@ def split_dataset(
         raise ValueError(f"Cột '{DRUG_ID_COL}' không có trong {processed_csv}")
 
     drug_ids = df[DRUG_ID_COL].tolist()
+    if len(set(drug_ids)) != len(drug_ids):
+        raise ValueError("drug_id bị trùng trong processed.csv.")
 
     if strategy == "random":
         assignment = random_split(drug_ids, train_ratio, val_ratio, seed)
     elif strategy == "scaffold":
-        scaffold_split(drug_ids)  # sẽ raise NotImplementedError
+        assignment = scaffold_split(drug_ids, df["canonical_smiles"].tolist(), train_ratio, val_ratio, seed)
     else:
         raise ValueError(f"Chiến lược không hỗ trợ: '{strategy}'. Chọn: random | scaffold")
 
+    if set(assignment.values()) != {"train", "val", "test"}:
+        raise ValueError("Dataset hoặc tỷ lệ quá nhỏ để tạo đủ train/val/test.")
     manifest = pd.DataFrame([
         {DRUG_ID_COL: did, SPLIT_COL: split}
         for did, split in assignment.items()
     ])
 
-    # Báo số mẫu mỗi split
     counts = manifest[SPLIT_COL].value_counts()
     print("[split] Phân bổ:")
     for split in ["train", "val", "test"]:
         n = counts.get(split, 0)
         print(f"  {split}: {n} ({n/len(manifest)*100:.1f}%)")
 
-    # Lưu manifest
-    manifest_path = splits_dir / "split_manifest.csv"
+    manifest_path = splits_dir / manifest_filename
+    manifest_path.parent.mkdir(parents=True, exist_ok=True)
     manifest.to_csv(manifest_path, index=False)
 
-    # Lưu metadata split
     meta = {
         "strategy": strategy,
         "seed": seed,
@@ -186,7 +196,10 @@ def main(argv: list[str] | None = None) -> None:
     processed_csv: Path = cfg["paths"]["data_processed"] / cfg["data"]["processed_filename"]
     splits_dir: Path = cfg["paths"]["data_splits"]
 
-    split_dataset(processed_csv, splits_dir, strategy, train_ratio, val_ratio, seed)
+    split_dataset(
+        processed_csv, splits_dir, strategy, train_ratio, val_ratio, seed,
+        manifest_filename=cfg["data"]["split_manifest"],
+    )
 
 
 if __name__ == "__main__":

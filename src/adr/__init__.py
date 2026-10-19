@@ -1,17 +1,4 @@
-"""
-adr – ADR prediction from molecular SMILES.
-
-Package structure:
-  adr.config       – load/merge/validate YAML configs
-  adr.schemas      – dataclass contracts cho artifact và prediction
-  adr.data         – download, validate, prepare, split
-  adr.features     – fingerprint và character tokenizer
-  adr.models       – frequency baseline, logreg, mlp, cnn
-  adr.train        – training loops và losses
-  adr.evaluate     – metrics và evaluation runner
-  adr.predict      – predictor thống nhất và predict CLI
-  adr.utils        – seed, artifact paths, helpers
-"""
+"""Dự đoán nhóm ADR từ cấu trúc phân tử SMILES."""
 import sys
 
 if sys.platform == "win32":

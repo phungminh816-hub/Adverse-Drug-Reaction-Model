@@ -1,23 +1,7 @@
-"""
-adr.predict.predictor – Predictor thống nhất cho mọi model type.
-
-Đây là nơi DUY NHẤT thực hiện inference nghiệp vụ.
-Streamlit app, CLI và bất kỳ script nào khác đều gọi qua đây.
-
-Luồng:
-  1. check_artifact_dir → load metadata → kiểm tra label_names, kích thước.
-  2. Canonicalize SMILES (RDKit nếu có).
-  3. Featurize theo model_type (fingerprint / tokenizer).
-  4. Load model → predict_scores → sigmoid nếu cần.
-  5. Trả PredictionResult với warnings.
-
-Thiếu artifact → raise FileNotFoundError (không sinh điểm ngẫu nhiên).
-Model neural (mlp/cnn) đang là TODO: load contract có thể hoàn chỉnh sau khi train.
-"""
+"""Nạp model, chuẩn hóa SMILES và dự đoán điểm ADR cho app/CLI."""
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 import numpy as np
@@ -45,7 +29,7 @@ def _canonicalize(smiles: str) -> tuple[str | None, list[str]]:
         )
         return smiles, warnings
     mol = Chem.MolFromSmiles(smiles.strip())
-    if mol is None:
+    if mol is None or mol.GetNumAtoms() == 0:
         return None, [f"SMILES không hợp lệ (RDKit parse lỗi): '{smiles[:80]}'"]
     canon = Chem.MolToSmiles(mol, isomericSmiles=True)
     return canon, warnings
@@ -84,27 +68,65 @@ class Predictor:
             self._model = PerLabelLogReg.load(self.run_dir)
 
         elif mt == "mlp":
-            # TODO (Tuần 5): Load MLP sau khi training loop hoàn thành
-            # Input: run_dir/model.pt + run_dir/fingerprint_config.json
-            # Output: self._model = MLP đã load, self._featurizer = MorganFeaturizer
-            # Điều kiện: model.pt phải tồn tại (check_artifact_dir đã kiểm tra)
-            raise NotImplementedError(
-                "MLP inference chưa triển khai (TODO Tuần 5).\n"
-                "  Sau khi train MLP, implement _load_model cho mt='mlp'."
-            )
+            from adr.models.mlp import MLP
+            from adr.features.fingerprints import MorganFeaturizer
+            self._model = MLP.load(self.run_dir).eval()
+            self._featurizer = MorganFeaturizer.load(self.run_dir / "fingerprint_config.json")
 
         elif mt == "cnn":
-            # TODO (Tuần 6-7): Load CNN + tokenizer
-            # Input: run_dir/model.pt + run_dir/tokenizer.json
-            # Output: self._model = SmilesCharCNN, self._tokenizer = CharTokenizer
-            # Điều kiện: eval mode, no_grad khi predict
-            raise NotImplementedError(
-                "CNN inference chưa triển khai (TODO Tuần 6-7).\n"
-                "  Sau khi train CNN, implement _load_model cho mt='cnn'."
-            )
+            from adr.models.cnn import SmilesCharCNN
+            from adr.features.tokenizer import CharTokenizer
+            self._model = SmilesCharCNN.load(self.run_dir).eval()
+            self._tokenizer = CharTokenizer.load(self.run_dir / "tokenizer.json")
 
         else:
             raise ValueError(f"model_type không nhận dạng được: '{mt}'")
+
+        model_labels = getattr(self._model, "label_names", None)
+        if model_labels is not None:
+            self.meta.check_label_names(model_labels)
+        if getattr(self._model, "n_labels", len(self.meta.label_names)) != len(self.meta.label_names):
+            raise ValueError("Số nhãn model không khớp metadata.")
+        if self._featurizer and self._featurizer.check_config(self.meta.feature_config):
+            raise ValueError("Fingerprint config không khớp metadata.")
+        if mt == "mlp" and self._model.input_dim != self._featurizer.n_bits:
+            raise ValueError("Kích thước fingerprint không khớp MLP.")
+        if mt == "cnn":
+            if self._tokenizer.check_config(self.meta.feature_config) or self._model.vocab_size != self._tokenizer.vocab_size:
+                raise ValueError("Tokenizer không khớp checkpoint hoặc metadata.")
+
+    def score_smiles(self, smiles: list[str], batch_size: int = 32) -> np.ndarray:
+        """Tạo ma trận điểm cho SMILES đã canonicalize."""
+        if batch_size <= 0:
+            raise ValueError("batch_size phải dương.")
+        if not smiles:
+            return np.empty((0, len(self.meta.label_names)), dtype=np.float32)
+        mt = self.meta.model_type
+        if mt == "frequency":
+            scores = self._model.predict_scores(len(smiles))
+        else:
+            batches = []
+            for start in range(0, len(smiles), batch_size):
+                chunk = smiles[start:start + batch_size]
+                if mt in {"logreg", "mlp"}:
+                    values, errors = self._featurizer.transform(chunk)
+                    if errors:
+                        raise ValueError(f"SMILES không hợp lệ: {errors[:3]}")
+                if mt == "logreg":
+                    batches.append(self._model.predict_scores(values))
+                else:
+                    import torch
+                    with torch.inference_mode():
+                        if mt == "mlp":
+                            logits = self._model(torch.from_numpy(values))
+                        else:
+                            ids, attention, _ = self._tokenizer.transform(chunk)
+                            logits = self._model(torch.from_numpy(ids), torch.from_numpy(attention))
+                        batches.append(logits.sigmoid().numpy())
+            scores = np.concatenate(batches)
+        if scores.shape != (len(smiles), len(self.meta.label_names)) or not np.isfinite(scores).all():
+            raise ValueError("Model trả điểm sai kích thước hoặc không hữu hạn.")
+        return np.clip(scores, 0, 1)
 
     def predict(
         self,
@@ -121,9 +143,7 @@ class Predictor:
         Returns:
             PredictionResult với scores [27], predicted_labels, warnings.
 
-        Raises:
-            ValueError: nếu SMILES không hợp lệ (RDKit).
-            FileNotFoundError: nếu artifact thiếu.
+        SMILES không hợp lệ trả canonical_smiles=None và thông báo trong warnings.
         """
         warnings: list[str] = []
         mt = self.meta.model_type
@@ -131,12 +151,11 @@ class Predictor:
         threshold = self.meta.threshold
         n_labels = len(label_names)
 
-        # Canonicalize
         canon, canon_warns = _canonicalize(smiles)
         warnings.extend(canon_warns)
 
         if canon is None:
-            # SMILES không hợp lệ
+
             return PredictionResult(
                 drug_id=drug_id,
                 input_smiles=smiles,
@@ -149,20 +168,14 @@ class Predictor:
                 warnings=warnings,
             )
 
-        # Featurize và predict
-        if mt == "frequency":
-            scores_arr = self._model.predict_scores(1)[0]  # [27]
+        scores_arr = self.score_smiles([canon])[0]
+        if mt == "cnn":
+            _, _, stats = self._tokenizer.transform([canon])
+            if stats["n_unk"]:
+                warnings.append(f"Có {stats['n_unk']} ký tự chưa thấy trong train (UNK).")
+            if stats["n_truncated"]:
+                warnings.append(f"SMILES bị cắt ở {self._tokenizer.max_length} ký tự.")
 
-        elif mt == "logreg":
-            X, fp_errors = self._featurizer.transform([canon])
-            if fp_errors:
-                warnings.extend(fp_errors)
-            scores_arr = self._model.predict_scores(X)[0]  # [27]
-
-        else:
-            raise RuntimeError(f"predict chưa hỗ trợ model_type='{mt}'")
-
-        # Đảm bảo scores hữu hạn [0, 1]
         scores_arr = np.clip(scores_arr, 0.0, 1.0)
         scores = scores_arr.tolist()
 
@@ -173,7 +186,7 @@ class Predictor:
         ]
 
         return PredictionResult(
-            drug_id=drug_id or sha256_str(canon)[:8],
+            drug_id=drug_id or sha256_str(canon),
             input_smiles=smiles,
             canonical_smiles=canon,
             model_id=self.meta.run_id,

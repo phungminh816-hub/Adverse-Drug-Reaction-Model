@@ -1,12 +1,7 @@
-"""
-adr.utils.artifacts – Helpers để kiểm tra và load artifact.
-
-Mọi inference phải đi qua check_artifact_dir để bắt lỗi sớm.
-"""
+"""Kiểm tra file bắt buộc và đọc metadata của model đã lưu."""
 
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
 from adr.schemas import ArtifactMetadata
@@ -14,8 +9,8 @@ from adr.schemas import ArtifactMetadata
 
 REQUIRED_FILES = {
     "frequency": ["metadata.json", "model.json"],
-    "logreg": ["metadata.json", "model.pkl"],
-    "mlp": ["metadata.json", "model.pt"],
+    "logreg": ["metadata.json", "model.pkl", "fingerprint_config.json"],
+    "mlp": ["metadata.json", "model.pt", "fingerprint_config.json"],
     "cnn": ["metadata.json", "model.pt", "tokenizer.json"],
 }
 
@@ -45,14 +40,14 @@ def check_artifact_dir(run_dir: Path, model_type: str | None = None) -> Artifact
 
     meta = ArtifactMetadata.load(meta_path)
 
-    # Kiểm tra model_type khớp
     if model_type is not None and meta.model_type != model_type:
         raise ValueError(
             f"model_type yêu cầu '{model_type}' nhưng artifact có '{meta.model_type}'."
         )
 
-    # Kiểm tra file bắt buộc theo model_type
-    required = REQUIRED_FILES.get(meta.model_type, ["metadata.json"])
+    if meta.model_type not in REQUIRED_FILES:
+        raise ValueError(f"model_type không hỗ trợ: {meta.model_type}")
+    required = REQUIRED_FILES[meta.model_type]
     missing = [f for f in required if not (run_dir / f).exists()]
     if missing:
         raise FileNotFoundError(
@@ -70,5 +65,5 @@ def list_run_dirs(artifacts_root: Path) -> list[Path]:
         return []
     return sorted(
         [d for d in root.iterdir() if d.is_dir() and (d / "metadata.json").exists()],
-        reverse=True,  # mới nhất trước
+        reverse=True,
     )

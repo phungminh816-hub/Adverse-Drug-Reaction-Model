@@ -1,18 +1,4 @@
-"""
-adr.data.prepare – Xử lý raw CSV thành processed.csv + label_names.json.
-
-Bước:
-  1. Kiểm tra schema (gọi validate).
-  2. Canonicalize SMILES bằng RDKit; bỏ hàng SMILES lỗi (báo cáo).
-  3. Tạo drug_id từ SHA-256 canonical SMILES.
-  4. Gộp phân tử trùng (nhãn/mask giống nhau); dừng nếu có conflict.
-  5. Lưu processed.csv, label_names.json, mapping.json.
-  6. Tạo mask riêng (NaN → mask=0); label value NaN được thay bằng 0.0 TRONG
-     processed.csv nhưng mask lưu riêng để không nhầm 0.0 với nhãn âm thật.
-
-CLI:
-  python -m adr.data.prepare --config configs/base.yaml
-"""
+"""Chuẩn hóa SMILES, gộp phân tử trùng và lưu dữ liệu cùng mask nhãn."""
 
 from __future__ import annotations
 
@@ -35,6 +21,7 @@ def prepare(
     processed_dir: Path,
     label_names_path: Path | None = None,
     num_labels: int = NUM_LABELS,
+    processed_filename: str = "processed.csv",
 ) -> pd.DataFrame:
     """
     Chạy pipeline prepare và lưu artifact.
@@ -45,11 +32,14 @@ def prepare(
     raw_csv = Path(raw_csv)
     processed_dir = Path(processed_dir)
     processed_dir.mkdir(parents=True, exist_ok=True)
+    if not _RDKIT_OK:
+        raise ImportError("Cần cài RDKit trước khi chuẩn bị dữ liệu.")
 
-    # Bước 1: Validate
     label_names_save = label_names_path or (processed_dir / "label_names.json")
     report = validate_raw(raw_csv, save_label_names=label_names_save)
     print_report(report)
+    if report.label_value_errors:
+        raise ValueError("Nhãn phải là 0, 1 hoặc NaN; xem báo cáo validation.")
 
     if report.conflicts:
         print(
@@ -71,7 +61,6 @@ def prepare(
     label_cols = report.label_names
     df = pd.read_csv(raw_csv)
 
-    # Bước 2: Canonicalize SMILES
     rows_valid = []
     skipped = []
     for idx, row in df.iterrows():
@@ -95,12 +84,12 @@ def prepare(
             json.dumps(skipped, indent=2, ensure_ascii=False), encoding="utf-8"
         )
 
+    if not rows_valid:
+        raise ValueError("Không còn SMILES hợp lệ sau khi kiểm tra dữ liệu.")
     df_valid = pd.DataFrame(rows_valid)
 
-    # Bước 3: drug_id từ SHA-256 canonical SMILES
     df_valid[DRUG_ID_COL] = df_valid[CANONICAL_SMILES_COL].map(sha256_str)
 
-    # Bước 4: Gộp phân tử trùng (nhãn giống nhau – đã xác nhận không conflict)
     mapping_records = []
     merged_rows = []
     seen: dict[str, list[int]] = {}
@@ -114,60 +103,30 @@ def prepare(
 
     df_out = pd.DataFrame(merged_rows).drop(columns=["source_row"])
 
-    # Mapping: drug_id → source_rows
     for did, src_rows in seen.items():
         mapping_records.append({"drug_id": did, "source_rows": src_rows})
 
-    # Bước 5: Đặt cột theo thứ tự chuẩn
     cols_order = [DRUG_ID_COL, SMILES_COL, CANONICAL_SMILES_COL] + label_cols
     df_out = df_out[cols_order].reset_index(drop=True)
 
-    # Thay NaN label bằng 0.0 (mask riêng được dùng khi training)
+    mask_arr = df_out[label_cols].notna().to_numpy(dtype=np.int8)
     df_out[label_cols] = df_out[label_cols].fillna(0.0)
 
-    # Lưu
-    out_csv = processed_dir / "processed.csv"
+    out_csv = processed_dir / processed_filename
+    out_csv.parent.mkdir(parents=True, exist_ok=True)
     df_out.to_csv(out_csv, index=False)
 
     mapping_path = processed_dir / "drug_id_mapping.json"
     with mapping_path.open("w", encoding="utf-8") as fh:
         json.dump(mapping_records, fh, indent=2, ensure_ascii=False)
 
-    # Ghi mask vào NPZ riêng (chưa tách split ở bước này)
-    # mask: 1 nếu nhãn có giá trị, 0 nếu NaN gốc
-    raw_df_for_mask = pd.read_csv(raw_csv)
-    canonical_to_rows: dict[str, list[int]] = {}
-    for idx, row in raw_df_for_mask.iterrows():
-        smi = str(row[SMILES_COL]).strip()
-        canon = _canonical_smiles(smi)
-        if canon is None:
-            continue
-        did = sha256_str(canon)
-        if did not in canonical_to_rows:
-            canonical_to_rows[did] = [int(idx)]
-        else:
-            canonical_to_rows[did].append(int(idx))
-
-    # mask: dùng hàng đầu tiên của mỗi nhóm
-    mask_rows = []
-    for _, row in df_out.iterrows():
-        did = row[DRUG_ID_COL]
-        # Lấy mask từ raw_df tại source rows đầu tiên
-        src_idxs = canonical_to_rows.get(did, [])
-        if src_idxs:
-            raw_row = raw_df_for_mask.loc[src_idxs[0], label_cols]
-            mask_rows.append((~raw_row.isna()).astype(int).tolist())
-        else:
-            mask_rows.append([0] * num_labels)
-
-    mask_arr = np.array(mask_rows, dtype=np.int8)
-    np.save(processed_dir / "label_mask.npy", mask_arr)
+    np.save(out_csv.parent / "label_mask.npy", mask_arr)
 
     print(f"[prepare] Đã lưu:")
     print(f"  {out_csv}  ({len(df_out)} thuốc, {num_labels} nhãn)")
     print(f"  {label_names_save}")
     print(f"  {mapping_path}")
-    print(f"  {processed_dir / 'label_mask.npy'}  shape={mask_arr.shape}")
+    print(f"  {out_csv.parent / 'label_mask.npy'}  shape={mask_arr.shape}")
 
     return df_out
 
@@ -186,10 +145,15 @@ def main(argv: list[str] | None = None) -> None:
     cfg = resolve_paths(load_config(args.config))
     raw_dir: Path = cfg["paths"]["data_raw"]
     processed_dir: Path = cfg["paths"]["data_processed"]
-    raw_filename = cfg["data"]["raw_filename"].replace(".gz", "")
+    raw_filename = cfg["data"]["raw_filename"].removesuffix(".gz")
     raw_csv = raw_dir / raw_filename
 
-    prepare(raw_csv, processed_dir)
+    prepare(
+        raw_csv, processed_dir,
+        label_names_path=processed_dir / cfg["data"]["label_names_file"],
+        num_labels=cfg["data"]["num_labels"],
+        processed_filename=cfg["data"]["processed_filename"],
+    )
 
 
 if __name__ == "__main__":

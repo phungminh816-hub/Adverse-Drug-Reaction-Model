@@ -1,9 +1,4 @@
-"""
-adr.utils.seed – Cố định random seed cho tái lập thực nghiệm.
-
-Ghi chú: Torch và numpy có trạng thái global riêng.
-Gọi set_seed(seed) ở đầu mỗi script/training loop.
-"""
+"""Đặt random seed cho Python, NumPy và PyTorch."""
 
 import random
 

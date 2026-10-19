@@ -6,15 +6,13 @@ Không cần dataset thật. Dùng fixture nhỏ.
 
 from __future__ import annotations
 
-import json
-import tempfile
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pytest
 
-from adr.data.validate import validate_raw, ValidationReport
+from adr.data.validate import validate_raw
 from adr.data.split import random_split, scaffold_split
 from adr.schemas import NUM_LABELS
 
@@ -34,7 +32,7 @@ def _make_csv(tmp_path: Path, smiles=None, labels=None) -> Path:
     data = {"smiles": smiles}
     for name in LABEL_NAMES:
         col = rng.integers(0, 2, size=len(smiles)).astype(float)
-        # Một số NaN (missing)
+
         missing = rng.random(len(smiles)) < 0.1
         col[missing] = np.nan
         data[name] = col
@@ -53,7 +51,7 @@ class TestValidate:
         report = validate_raw(csv)
         assert report.total_rows == N
         assert report.n_labels == NUM_LABELS
-        # Không có label value error với 0/1/NaN
+
         assert len(report.label_value_errors) == 0
 
     def test_missing_smiles_col(self, tmp_path):
@@ -76,7 +74,7 @@ class TestValidate:
         csv = tmp_path / "few_labels.csv"
         df.to_csv(csv, index=False)
         report = validate_raw(csv)
-        assert report.n_labels == 2  # chỉ 2 nhãn
+        assert report.n_labels == 2
         assert any("27" in w for w in report.warnings)
 
     def test_file_not_found(self, tmp_path):
@@ -108,6 +106,6 @@ class TestSplit:
         a2 = random_split(ids, seed=99)
         assert a1 != a2
 
-    def test_scaffold_split_raises(self):
-        with pytest.raises(NotImplementedError):
+    def test_scaffold_split_requires_smiles(self):
+        with pytest.raises(ValueError, match="canonical_smiles"):
             scaffold_split(["drug_0"])

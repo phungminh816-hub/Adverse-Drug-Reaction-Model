@@ -11,7 +11,6 @@ requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [{name = "HUST ADR Team"}]
 
-# Runtime dependencies (pin after verification)
 dependencies = [
     "numpy",
     "pandas",

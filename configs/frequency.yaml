@@ -1,7 +1,3 @@
-# configs/frequency.yaml
-# Baseline tần suất: mỗi nhãn trả tỷ lệ dương trong train.
-# Kế thừa base.yaml (load base trước rồi merge file này).
-
 model:
   type: "frequency"
   description: "Frequency baseline – returns train positive rate per label"

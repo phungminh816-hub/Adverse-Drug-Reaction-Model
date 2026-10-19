@@ -1,9 +1,4 @@
-"""
-adr.schemas – Dataclass contracts cho artifact metadata và prediction output.
-
-Tất cả artifact phải có ArtifactMetadata.
-Inference trả PredictionResult.
-"""
+"""Khai báo metadata model, kết quả dự đoán và hằng số dữ liệu."""
 
 from __future__ import annotations
 
@@ -13,37 +8,33 @@ from pathlib import Path
 from typing import Any
 
 
-# ---------------------------------------------------------------------------
-# Artifact metadata
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class ArtifactMetadata:
     """
     Metadata được lưu cùng mọi run artifact.
     Dùng để kiểm tra tính nhất quán khi load lại.
     """
-    model_type: str                      # "frequency" | "logreg" | "mlp" | "cnn"
-    run_id: str                          # timestamp-based unique ID
+    model_type: str
+    run_id: str
     seed: int
-    label_names: list[str]               # 27 tên theo thứ tự cột nguồn
-    dataset_checksum: str                # SHA-256 của processed.csv
-    split_manifest_checksum: str         # SHA-256 của split_manifest.csv
-    feature_config: dict[str, Any]       # fingerprint hoặc tokenizer params
-    library_versions: dict[str, str]     # {"numpy": "2.5.3", ...}
-    threshold: float                     # inference threshold
-    eval_label_policy: str               # mô tả nhãn nào được dùng trong eval
-    created_at_utc: str                  # ISO 8601
+    label_names: list[str]
+    dataset_checksum: str
+    split_manifest_checksum: str
+    feature_config: dict[str, Any]
+    library_versions: dict[str, str]
+    threshold: float
+    eval_label_policy: str
+    created_at_utc: str
     config_resolved: dict[str, Any] = field(default_factory=dict)
-    # Tokenizer artifact path (chỉ dùng cho CNN)
+
     tokenizer_path: str | None = None
+    label_mask_checksum: str | None = None
 
     def save(self, path: Path) -> None:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="utf-8") as fh:
-            json.dump(asdict(self), fh, indent=2, ensure_ascii=False)
+            json.dump(asdict(self), fh, indent=2, ensure_ascii=False, default=str)
 
     @classmethod
     def load(cls, path: Path) -> "ArtifactMetadata":
@@ -65,11 +56,6 @@ class ArtifactMetadata:
             )
 
 
-# ---------------------------------------------------------------------------
-# Prediction output
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class PredictionResult:
     """
@@ -84,9 +70,9 @@ class PredictionResult:
     canonical_smiles: str | None
     model_id: str
     label_names: list[str]
-    scores: list[float]                  # độ dài == len(label_names) == 27
+    scores: list[float]
     threshold: float
-    predicted_labels: list[str]          # nhãn có score >= threshold
+    predicted_labels: list[str]
     warnings: list[str] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -109,10 +95,6 @@ class PredictionResult:
         return list(pairs[:k])
 
 
-# ---------------------------------------------------------------------------
-# Dataset schema constants
-# ---------------------------------------------------------------------------
-
 NUM_LABELS: int = 27
 SMILES_COL: str = "smiles"
 DRUG_ID_COL: str = "drug_id"
@@ -121,6 +103,6 @@ SPLIT_COL: str = "split"
 VALID_SPLITS: frozenset[str] = frozenset({"train", "val", "test"})
 VALID_LABEL_VALUES: frozenset = frozenset({0, 1, 0.0, 1.0})
 
-# PAD/UNK token IDs cho tokenizer
+
 PAD_TOKEN_ID: int = 0
 UNK_TOKEN_ID: int = 1

@@ -1,25 +1,13 @@
-"""
-adr.config – Load, merge và validate YAML config.
-
-Quy tắc merge:
-  1. Load base.yaml (project root / configs/base.yaml).
-  2. Nếu truyền thêm model config, deep-merge đè lên base.
-  3. Deep-merge không làm mất key lồng nhau của base nếu model config
-     chỉ override một số sub-key.
-  4. Lưu resolved config vào run_dir/config.yaml khi có run_dir.
-
-Sử dụng:
-  cfg = load_config("configs/logreg.yaml")
-  cfg = load_config("configs/mlp.yaml", base="configs/base.yaml")
-"""
+"""Đọc, hợp nhất, kiểm tra và lưu cấu hình YAML."""
 
 from __future__ import annotations
 
 import copy
-import datetime
 import sys
 from pathlib import Path
 from typing import Any
+
+from adr.utils.paths import find_project_root
 
 try:
     import yaml
@@ -49,27 +37,28 @@ def _deep_merge(base: dict, override: dict) -> dict:
     return result
 
 
-def _find_project_root() -> Path:
-    """Tìm project root (chứa pyproject.toml) từ cwd hoặc __file__."""
-    candidates = [Path.cwd()] + list(Path.cwd().parents)
-    for p in candidates:
-        if (p / "pyproject.toml").exists():
-            return p
-    # fallback: cwd
-    return Path.cwd()
-
-
-PROJECT_ROOT: Path = _find_project_root()
+PROJECT_ROOT: Path = find_project_root()
 DEFAULT_BASE: Path = PROJECT_ROOT / "configs" / "base.yaml"
 
 
+def _config_path(path: str | Path) -> Path:
+    """Tìm file cấu hình từ đường dẫn tuyệt đối, cwd hoặc gốc dự án."""
+    path = Path(path).expanduser()
+    if not path.is_absolute() and not path.exists():
+        path = PROJECT_ROOT / path
+    return path
+
+
 def _load_yaml(path: Path) -> dict:
+    """Đọc một YAML mapping và báo lỗi nếu nội dung khác kiểu dictionary."""
     _require_yaml()
     if not path.exists():
         raise FileNotFoundError(f"Config không tìm thấy: {path}")
     with path.open("r", encoding="utf-8") as fh:
         data = yaml.safe_load(fh)
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        raise ValueError(f"Config phải là YAML mapping: {path}")
+    return data
 
 
 def load_config(
@@ -87,11 +76,11 @@ def load_config(
     Returns:
         dict config đã merge.
     """
-    base_path = Path(base) if base else DEFAULT_BASE
+    base_path = _config_path(base) if base else DEFAULT_BASE
     cfg = _load_yaml(base_path)
 
     if model_config is not None:
-        model_path = Path(model_config)
+        model_path = _config_path(model_config)
         model_cfg = _load_yaml(model_path)
         cfg = _deep_merge(cfg, model_cfg)
 
@@ -106,13 +95,24 @@ def resolve_paths(cfg: dict[str, Any]) -> dict[str, Any]:
     cfg = copy.deepcopy(cfg)
     paths_section = cfg.get("paths", {})
     for key, val in paths_section.items():
-        if isinstance(val, str):
-            p = Path(val)
+        if isinstance(val, (str, Path)):
+            p = Path(val).expanduser()
             if not p.is_absolute():
                 p = PROJECT_ROOT / p
             paths_section[key] = p
     cfg["paths"] = paths_section
     return cfg
+
+
+def _pathify(obj: Any) -> Any:
+    """Chuyển Path lồng trong dictionary/list thành chuỗi để ghi YAML."""
+    if isinstance(obj, Path):
+        return str(obj)
+    if isinstance(obj, dict):
+        return {k: _pathify(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_pathify(v) for v in obj]
+    return obj
 
 
 def save_config(cfg: dict[str, Any], run_dir: Path) -> Path:
@@ -122,18 +122,8 @@ def save_config(cfg: dict[str, Any], run_dir: Path) -> Path:
     run_dir.mkdir(parents=True, exist_ok=True)
     out = run_dir / "config.yaml"
 
-    # Convert Path objects sang str để yaml.dump xử lý được
-    def _pathify(obj: Any) -> Any:
-        if isinstance(obj, Path):
-            return str(obj)
-        if isinstance(obj, dict):
-            return {k: _pathify(v) for k, v in obj.items()}
-        if isinstance(obj, list):
-            return [_pathify(v) for v in obj]
-        return obj
-
     with out.open("w", encoding="utf-8") as fh:
-        yaml.dump(_pathify(cfg), fh, allow_unicode=True, default_flow_style=False)
+        yaml.safe_dump(_pathify(cfg), fh, allow_unicode=True, default_flow_style=False)
     return out
 
 
@@ -175,5 +165,5 @@ if __name__ == "__main__":
 
     cfg = resolve_paths(cfg)
     _require_yaml()
-    print(yaml.dump(cfg, allow_unicode=True, default_flow_style=False))
+    print(yaml.safe_dump(_pathify(cfg), allow_unicode=True, default_flow_style=False))
     print("Config hợp lệ.")
