@@ -1,4 +1,4 @@
-# ADR Predictor — HUST Project 1
+# ADR Predictor 
 
 Dự đoán 27 nhóm ADR MedDRA từ cấu trúc phân tử SMILES, dùng benchmark SIDER MoleculeNet.
 Pipeline chạy được với Frequency, Logistic Regression, MLP và CNN.
